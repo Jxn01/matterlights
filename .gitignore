@@ -1,0 +1,16 @@
+.venv/
+.pytest_cache/
+.coverage
+__pycache__/
+*.egg-info/
+*.log
+*.pyc
+*.pyo
+.env
+.matterlights-preview.json
+.matterlights-zones.json
+.vscode/
+build/
+dist/
+htmlcov/
+pip-wheel-metadata/
