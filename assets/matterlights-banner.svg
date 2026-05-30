@@ -46,20 +46,14 @@
   </g>
 
   <g>
-    <circle cx="872" cy="304" r="58" fill="#0B1220" stroke="rgba(255,255,255,0.14)" stroke-width="2" />
-    <circle cx="872" cy="304" r="26" fill="#7DD3FC" />
-    <rect x="860" y="338" width="24" height="34" rx="10" fill="#D7E7FF" />
-    <path d="M838 301C838 279.46 855.46 262 877 262C898.54 262 916 279.46 916 301C916 322.54 898.54 340 877 340H867C851.536 340 838 326.464 838 311V301Z" fill="rgba(125,211,252,0.14)" />
-
-    <circle cx="998" cy="382" r="58" fill="#0B1220" stroke="rgba(255,255,255,0.14)" stroke-width="2" />
-    <circle cx="998" cy="382" r="26" fill="#F59E0B" />
-    <rect x="986" y="416" width="24" height="34" rx="10" fill="#FFE3B1" />
-    <path d="M964 379C964 357.46 981.46 340 1003 340C1024.54 340 1042 357.46 1042 379C1042 400.54 1024.54 418 1003 418H993C977.536 418 964 404.464 964 389V379Z" fill="rgba(245,158,11,0.16)" />
-  </g>
-
-  <g>
-    <text x="760" y="284" fill="#F5FAFF" font-size="72" font-family="Segoe UI, Arial, sans-serif" font-weight="700">MatterLights</text>
-    <text x="760" y="336" fill="#93A6BF" font-size="26" font-family="Segoe UI, Arial, sans-serif">Windows screen sync for Home Assistant ambient lighting</text>
-    <text x="760" y="430" fill="#D6E5F8" font-size="22" font-family="Segoe UI, Arial, sans-serif">Dashboard. Zone designer. Background startup. Tuned for vivid room ambience.</text>
+    <text x="742" y="286" fill="#F5FAFF" font-size="66" font-family="Segoe UI, Arial, sans-serif" font-weight="700">MatterLights</text>
+    <text x="742" y="350" fill="#9EB3CD" font-size="22" font-family="Segoe UI, Arial, sans-serif">
+      <tspan x="742" dy="0">Windows screen sync for Home Assistant</tspan>
+      <tspan x="742" dy="32">ambient lighting.</tspan>
+    </text>
+    <text x="742" y="462" fill="#D6E5F8" font-size="19" font-family="Segoe UI, Arial, sans-serif">
+      <tspan x="742" dy="0">Dashboard. Zone designer. Background startup.</tspan>
+      <tspan x="742" dy="28">Tuned for vivid room ambience.</tspan>
+    </text>
   </g>
 </svg>
