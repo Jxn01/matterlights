@@ -20,6 +20,7 @@ class LightUpdate:
     entity_id: str
     color: RgbColor | None = None
     brightness: int | None = None
+    color_temp_kelvin: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,7 @@ class LightUpdateBatch:
     entity_ids: tuple[str, ...]
     color: RgbColor | None = None
     brightness: int | None = None
+    color_temp_kelvin: int | None = None
 
 
 @dataclass(slots=True)
@@ -158,13 +160,19 @@ class HomeAssistantClient:
 
 
     def _apply_light_update(self, update: LightUpdateBatch, transition_seconds: float) -> bool:
-        if update.color is None:
+        if update.color is None and update.color_temp_kelvin is None:
             return self._post_light_service(update.entity_ids, "turn_off", transition_seconds, {})
 
-        payload = {
-            "rgb_color": update.color.as_list(),
-            "brightness": update.brightness if update.brightness is not None else update.color.max_channel(),
-        }
+        if update.color_temp_kelvin is not None:
+            payload = {
+                "color_temp_kelvin": update.color_temp_kelvin,
+                "brightness": update.brightness if update.brightness is not None else 255,
+            }
+        else:
+            payload = {
+                "rgb_color": update.color.as_list(),
+                "brightness": update.brightness if update.brightness is not None else update.color.max_channel(),
+            }
 
         return self._post_light_service(update.entity_ids, "turn_on", transition_seconds, payload)
 
@@ -190,22 +198,29 @@ class HomeAssistantClient:
             ) as response:
                 response.raise_for_status()
             return True
-        except requests.RequestException:
+        except requests.RequestException as exc:
             if log_errors:
-                LOGGER.exception("Failed to %s %s", service, ", ".join(entity_ids))
+                # Transient HA/Matter failures are expected and retried; a one-line
+                # reason is enough — a full stack trace per bulb just floods the log.
+                LOGGER.warning("Failed to %s %s: %s", service, ", ".join(entity_ids), _concise_request_error(exc))
             return False
 
 
+def _concise_request_error(exc: requests.RequestException) -> str:
+    response = getattr(exc, "response", None)
+    if response is not None:
+        return f"HTTP {response.status_code}"
+    return type(exc).__name__
+
+
 def _group_light_updates(updates: list[LightUpdate]) -> list[LightUpdateBatch]:
-    grouped_entity_ids: dict[tuple[tuple[int, int, int] | None, int | None], list[str]] = defaultdict(list)
+    grouped_entity_ids: dict[tuple[tuple[int, int, int] | None, int | None, int | None], list[str]] = defaultdict(list)
     for update in updates:
-        key = (tuple(update.color.as_list()) if update.color is not None else None, update.brightness)
-        grouped_entity_ids[key].append(update.entity_id)
+        grouped_entity_ids[_group_key(update)].append(update.entity_id)
 
     grouped_updates: list[LightUpdateBatch] = []
     for update in updates:
-        key = (tuple(update.color.as_list()) if update.color is not None else None, update.brightness)
-        entity_ids = grouped_entity_ids.pop(key, None)
+        entity_ids = grouped_entity_ids.pop(_group_key(update), None)
         if entity_ids is None:
             continue
         grouped_updates.append(
@@ -213,6 +228,12 @@ def _group_light_updates(updates: list[LightUpdate]) -> list[LightUpdateBatch]:
                 entity_ids=tuple(entity_ids),
                 color=update.color,
                 brightness=update.brightness,
+                color_temp_kelvin=update.color_temp_kelvin,
             )
         )
     return grouped_updates
+
+
+def _group_key(update: LightUpdate) -> tuple[tuple[int, int, int] | None, int | None, int | None]:
+    color_key = tuple(update.color.as_list()) if update.color is not None else None
+    return (color_key, update.brightness, update.color_temp_kelvin)

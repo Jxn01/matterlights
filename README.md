@@ -23,7 +23,9 @@ Instead of adding another lighting server or streaming stack, MatterLights captu
 ## Highlights
 
 - Whole-screen, zoned, and shared-variant sync modes.
+- Autonomous (screen-driven) and custom (static color or looping pattern) playback modes, switchable live from the dashboard.
 - OLED-aware dark detection so black scenes can drop the lights to off.
+- Display-sleep aware: when the monitor powers off, the lights follow it off.
 - Saturation and dominant-color tuning aimed at vivid ambient lighting rather than washed-out averages.
 - Local dashboard at `http://127.0.0.1:8770` for status, logs, and service restarts.
 - Zone designer at `http://127.0.0.1:8765` with screenshot overlays and a flash-selected-bulb action.
@@ -122,6 +124,40 @@ Manual start:
 powershell -ExecutionPolicy Bypass -File .\scripts\start-zone-ui.ps1
 ```
 
+## Playback modes
+
+MatterLights has two playback modes, switchable live from the **Playback Mode** panel on the dashboard. The choice is written to `CONTROL_STATE_FILE` and the running sync loop picks it up automatically (no restart needed).
+
+- **Autonomous** — the default screen-driven behavior described above.
+- **Custom** — ignores the screen and drives every light from either a single static color or a looping multi-color pattern. Useful as mood lighting when you are not gaming or watching anything.
+
+### Color vs. white
+
+Every custom color — the solid color and each pattern step — can be either an **RGB color** or a **tunable white** color temperature (for bulbs that support white mode, like the Ledvance Matter PAR16). Pick **Color** for a hue, or **White** for a Kelvin value (warm ↔ cool); brightness applies to both. You can even mix them in one pattern, e.g. fade from a warm white into a color and back.
+
+### Patterns
+
+A pattern is an ordered list of colors that loops. Each color has two timings:
+
+- **Hold** — how many seconds to stay on that color.
+- **Fade in** — how many seconds the previous color takes to fade into this one. The fade uses Home Assistant's `transition` service parameter.
+
+> **Fades are off by default.** Many Matter bulbs (including the Ledvance PAR16) lock up when sent a `transition` command and have to be power-cycled, so pattern fades are capped by `MAX_PATTERN_TRANSITION_SECONDS` (default `0`, meaning colors snap). If your bulbs are known to handle transitions, set it above `0` in `.env` to enable fades.
+
+The total loop length is the sum of every hold and fade. For example, the dashboard's default 10-second loop is:
+
+| Color | Hold | Fade in |
+| --- | --- | --- |
+| Red | 3s | 0s (snaps in) |
+| Blue | 4s | 1s |
+| Yellow | 0s | 2s |
+
+That is: red for 3s → fade to blue over 1s → blue for 4s → fade to yellow over 2s → loop back to red. The editor shows a live, animated preview of the loop and the computed loop length while you arrange the colors.
+
+### Screen sleep
+
+When the monitor goes to sleep, the lights turn off in both modes. This is the same idea as OLED dark detection, but it also covers custom mode and is driven by the actual Windows display power state rather than screen content. Set `RESPECT_DISPLAY_SLEEP=false` to keep custom colors on while the screen sleeps.
+
 ## Windows autostart
 
 Install startup tasks for both the sync loop and dashboard:
@@ -153,6 +189,9 @@ The app reads `.env` first and falls back to shell environment variables. The mo
 | `HA_TOKEN` | Home Assistant long-lived access token. |
 | `HA_LIGHT_ENTITIES` | Comma-separated list of light entities to control. |
 | `LIGHT_ZONE_LAYOUT` | Ordered zone names matched to `HA_LIGHT_ENTITIES`. |
+| `CONTROL_STATE_FILE` | Where the playback mode (autonomous/custom) and pattern are stored. |
+| `RESPECT_DISPLAY_SLEEP` | `true` to turn lights off when the monitor sleeps. |
+| `MAX_PATTERN_TRANSITION_SECONDS` | Caps custom pattern fades; `0` snaps (safe for Matter bulbs that freeze on transitions). |
 | `COLOR_SYNC_MODE` | `zoned` or `shared-variant`. |
 | `PRIMARY_LIGHT_ZONE_NAMES` | Primary bulbs used in shared-variant mode. |
 | `SCREEN_CAPTURE_TARGET` | `primary`, `all`, or a 1-based monitor index. |

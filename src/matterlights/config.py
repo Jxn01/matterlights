@@ -13,6 +13,8 @@ class Settings:
     light_zone_layout: list[str] = field(default_factory=list)
     light_zone_file: Path | None = None
     preview_override_file: Path | None = None
+    control_state_file: Path | None = None
+    respect_display_sleep: bool = True
     color_sync_mode: str = "zoned"
     primary_light_zone_names: list[str] = field(default_factory=list)
     zone_ui_port: int = 8765
@@ -26,6 +28,7 @@ class Settings:
     color_change_threshold: int = 12
     brightness_floor: int = 0
     transition_seconds: float = 0.0
+    max_pattern_transition_seconds: float = 0.0
     dark_threshold: int = 12
     dark_active_ratio_threshold: float = 0.05
     color_boost: float = 1.15
@@ -67,6 +70,11 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
             get_value("PREVIEW_OVERRIDE_FILE", str(_default_preview_override_file_path(path_base_dir))),
             path_base_dir,
         ),
+        control_state_file=_parse_optional_path(
+            get_value("CONTROL_STATE_FILE", str(_default_control_state_file_path(path_base_dir))),
+            path_base_dir,
+        ),
+        respect_display_sleep=_parse_bool(get_value("RESPECT_DISPLAY_SLEEP", "true")),
         color_sync_mode=get_value("COLOR_SYNC_MODE", "zoned").strip().lower(),
         primary_light_zone_names=_parse_light_zone_layout(
             get_value("PRIMARY_LIGHT_ZONE_NAMES", "top-center,bottom-left")
@@ -82,6 +90,7 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         color_change_threshold=int(get_value("COLOR_CHANGE_THRESHOLD", "12")),
         brightness_floor=int(get_value("BRIGHTNESS_FLOOR", "0")),
         transition_seconds=float(get_value("TRANSITION_SECONDS", "0.0")),
+        max_pattern_transition_seconds=float(get_value("MAX_PATTERN_TRANSITION_SECONDS", "0.0")),
         dark_threshold=int(get_value("DARK_THRESHOLD", "12")),
         dark_active_ratio_threshold=float(get_value("DARK_ACTIVE_RATIO_THRESHOLD", "0.05")),
         color_boost=float(get_value("COLOR_BOOST", "1.15")),
@@ -136,6 +145,14 @@ def _default_zone_file_path(base_dir: Path | None = None) -> Path:
 
 def _default_preview_override_file_path(base_dir: Path | None = None) -> Path:
     return (base_dir or Path.cwd()) / ".matterlights-preview.json"
+
+
+def _default_control_state_file_path(base_dir: Path | None = None) -> Path:
+    return (base_dir or Path.cwd()) / ".matterlights-control.json"
+
+
+def _parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_log_path(value: str, base_dir: Path) -> Path | None:
@@ -208,6 +225,8 @@ def _validate_settings(settings: Settings) -> None:
         raise ValueError("COLOR_BOOST must be greater than 0")
     if settings.transition_seconds < 0:
         raise ValueError("TRANSITION_SECONDS cannot be negative")
+    if settings.max_pattern_transition_seconds < 0:
+        raise ValueError("MAX_PATTERN_TRANSITION_SECONDS cannot be negative")
     if settings.sample_stride <= 0:
         raise ValueError("SAMPLE_STRIDE must be greater than 0")
     if settings.error_retry_seconds <= 0:

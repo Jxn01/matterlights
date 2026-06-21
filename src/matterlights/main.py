@@ -9,7 +9,10 @@ import time
 from mss import MSS
 
 from matterlights.config import load_settings
+from matterlights.display_power import start_display_monitor
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
+from matterlights.playback import MODE_CUSTOM, CustomPlayer, load_control_state
+from matterlights.process_lock import acquire_sync_singleton
 from matterlights.preview import load_preview_overrides
 from matterlights.screen import (
     RgbColor,
@@ -60,6 +63,12 @@ def main() -> int:
 
     settings = load_settings()
     _configure_logging(settings.log_path)
+
+    sync_lock = acquire_sync_singleton(LOGGER)
+    if sync_lock is None:
+        LOGGER.warning("Another MatterLights sync loop is already running; this instance will exit.")
+        return 0
+
     client = HomeAssistantClient(
         settings.ha_url,
         settings.ha_token,
@@ -72,16 +81,28 @@ def main() -> int:
         settings.light_entities,
         settings.light_zone_file,
     )
-    zone_file_mtime = _zone_file_mtime(settings.light_zone_file)
+    zone_file_mtime = _path_mtime(settings.light_zone_file)
+    control_state = load_control_state(settings.control_state_file)
+    control_file_mtime = _path_mtime(settings.control_state_file)
+    custom_player = CustomPlayer()
     last_colors: dict[str, RgbColor] = {}
     off_entity_ids: set[str] = set()
     retry_entity_ids: set[str] = set()
     available_entity_ids = set(settings.light_entities)
     unavailable_entity_ids: set[str] = set()
     next_availability_refresh = 0.0
+    display_off_active = False
+    display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
+
+    def reset_runtime_caches() -> None:
+        last_colors.clear()
+        off_entity_ids.clear()
+        retry_entity_ids.clear()
+        custom_player.reset()
 
     LOGGER.info(
-        "Starting sync for %s",
+        "Starting sync in %s mode for %s",
+        control_state.mode,
         ", ".join(
             f"{entity_id}={zone.name}" for entity_id, zone in zip(settings.light_entities, light_zones)
         ),
@@ -92,7 +113,7 @@ def main() -> int:
             while True:
                 iteration_started = time.monotonic()
                 try:
-                    current_zone_file_mtime = _zone_file_mtime(settings.light_zone_file)
+                    current_zone_file_mtime = _path_mtime(settings.light_zone_file)
                     if current_zone_file_mtime != zone_file_mtime:
                         light_zones = load_configured_light_zones(
                             settings.light_zone_layout,
@@ -101,6 +122,15 @@ def main() -> int:
                         )
                         zone_file_mtime = current_zone_file_mtime
                         LOGGER.info("Reloaded light zone layout")
+
+                    current_control_file_mtime = _path_mtime(settings.control_state_file)
+                    if current_control_file_mtime != control_file_mtime:
+                        new_control_state = load_control_state(settings.control_state_file)
+                        if new_control_state.mode != control_state.mode:
+                            LOGGER.info("Playback mode set to %s", new_control_state.mode)
+                        control_state = new_control_state
+                        control_file_mtime = current_control_file_mtime
+                        reset_runtime_caches()
 
                     current_time = time.monotonic()
                     if current_time >= next_availability_refresh:
@@ -114,56 +144,96 @@ def main() -> int:
                                 ", ".join(sorted(unavailable_entity_ids)),
                             )
 
-                    captured_zone_samples = capture_zone_samples_with_session(
-                        screen_capture_session,
-                        settings.sample_stride,
-                        settings.color_boost,
-                        settings.screen_capture_target,
-                        _capture_zones_for_mode(settings.color_sync_mode, light_zones),
-                    )
-                    zone_samples = _build_effective_zone_samples(
-                        settings.color_sync_mode,
-                        light_zones,
-                        captured_zone_samples,
-                        settings.primary_light_zone_names,
-                    )
-                    preview_overrides = load_preview_overrides(settings.preview_override_file)
-                    desired_states = _build_desired_states(
-                        settings.light_entities,
-                        zone_samples,
-                        available_entity_ids,
-                        preview_overrides,
-                        retry_entity_ids,
-                        last_colors,
-                        off_entity_ids,
-                        settings.color_change_threshold,
-                        settings.dark_threshold,
-                        settings.dark_active_ratio_threshold,
-                        settings.brightness_floor,
-                    )
+                    display_on = display_monitor.is_display_on() if display_monitor is not None else True
+                    if display_off_active and display_on:
+                        display_off_active = False
+                        reset_runtime_caches()
+                        LOGGER.info("Display resumed; restoring lights")
 
-                    if desired_states:
-                        failed_entity_ids = client.apply_light_updates(
-                            [state.update for state in desired_states],
-                            settings.transition_seconds,
+                    ordered_available = [
+                        entity_id for entity_id in settings.light_entities if entity_id in available_entity_ids
+                    ]
+
+                    if not display_on:
+                        if not display_off_active:
+                            if ordered_available:
+                                client.turn_off_lights(ordered_available, settings.transition_seconds)
+                            display_off_active = True
+                            reset_runtime_caches()
+                            LOGGER.info("Display off; turning lights off")
+                    elif control_state.mode == MODE_CUSTOM:
+                        command = custom_player.tick(control_state.custom, ordered_available, current_time)
+                        if command is not None and command.updates:
+                            # Many Matter bulbs lock up on a transition/fade command, so fades
+                            # are capped (off by default) and only sent if explicitly enabled.
+                            transition_seconds = min(
+                                command.transition_seconds, settings.max_pattern_transition_seconds
+                            )
+                            failed_entity_ids = client.apply_light_updates(
+                                command.updates,
+                                transition_seconds,
+                            )
+                            if failed_entity_ids:
+                                # Un-confirm only the failed lights so the next tick retries
+                                # just them (snapped) instead of restarting the whole pattern.
+                                custom_player.mark_failed(command.target_key, set(failed_entity_ids))
+                                if len(failed_entity_ids) == len(command.updates):
+                                    raise RuntimeError("No lights were updated successfully")
+                                LOGGER.warning(
+                                    "Custom playback failed for: %s",
+                                    ", ".join(failed_entity_ids),
+                                )
+                    else:
+                        captured_zone_samples = capture_zone_samples_with_session(
+                            screen_capture_session,
+                            settings.sample_stride,
+                            settings.color_boost,
+                            settings.screen_capture_target,
+                            _capture_zones_for_mode(settings.color_sync_mode, light_zones),
                         )
-                        if len(failed_entity_ids) == len(desired_states):
-                            raise RuntimeError("No lights were updated successfully")
+                        zone_samples = _build_effective_zone_samples(
+                            settings.color_sync_mode,
+                            light_zones,
+                            captured_zone_samples,
+                            settings.primary_light_zone_names,
+                        )
+                        preview_overrides = load_preview_overrides(settings.preview_override_file)
+                        desired_states = _build_desired_states(
+                            settings.light_entities,
+                            zone_samples,
+                            available_entity_ids,
+                            preview_overrides,
+                            retry_entity_ids,
+                            last_colors,
+                            off_entity_ids,
+                            settings.color_change_threshold,
+                            settings.dark_threshold,
+                            settings.dark_active_ratio_threshold,
+                            settings.brightness_floor,
+                        )
 
-                        failed_entity_id_set = set(failed_entity_ids)
-                        retry_entity_ids = failed_entity_id_set
-                        _record_successful_states(desired_states, failed_entity_id_set, last_colors, off_entity_ids)
+                        if desired_states:
+                            failed_entity_ids = client.apply_light_updates(
+                                [state.update for state in desired_states],
+                                settings.transition_seconds,
+                            )
+                            if len(failed_entity_ids) == len(desired_states):
+                                raise RuntimeError("No lights were updated successfully")
 
-                        if failed_entity_ids:
-                            LOGGER.warning(
-                                "Updated zoned lights with failures for: %s",
-                                ", ".join(failed_entity_ids),
-                            )
-                        else:
-                            LOGGER.debug(
-                                "Updated %s zoned lights",
-                                len(desired_states),
-                            )
+                            failed_entity_id_set = set(failed_entity_ids)
+                            retry_entity_ids = failed_entity_id_set
+                            _record_successful_states(desired_states, failed_entity_id_set, last_colors, off_entity_ids)
+
+                            if failed_entity_ids:
+                                LOGGER.warning(
+                                    "Updated zoned lights with failures for: %s",
+                                    ", ".join(failed_entity_ids),
+                                )
+                            else:
+                                LOGGER.debug(
+                                    "Updated %s zoned lights",
+                                    len(desired_states),
+                                )
                 except KeyboardInterrupt:
                     raise
                 except Exception:
@@ -182,6 +252,10 @@ def main() -> int:
     except Exception:
         LOGGER.exception("Sync failed")
         return 1
+    finally:
+        if display_monitor is not None:
+            display_monitor.stop()
+        sync_lock.release()
 
 
 def _configure_logging(log_path) -> None:
@@ -465,10 +539,10 @@ def _record_successful_states(
             off_entity_ids.discard(state.entity_id)
 
 
-def _zone_file_mtime(zone_file) -> float | None:
-    if zone_file is None or not zone_file.exists():
+def _path_mtime(path) -> float | None:
+    if path is None or not path.exists():
         return None
-    return zone_file.stat().st_mtime
+    return path.stat().st_mtime
 
 
 if __name__ == "__main__":

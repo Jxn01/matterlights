@@ -7,6 +7,7 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.matterlights-control.json
 .matterlights-preview.json
 .matterlights-zones.json
 .vscode/
