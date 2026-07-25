@@ -18,6 +18,7 @@ class Settings:
     turn_off_on_shutdown: bool = True
     color_sync_mode: str = "zoned"
     primary_light_zone_names: list[str] = field(default_factory=list)
+    ambience_near_lights: list[str] = field(default_factory=list)
     zone_ui_port: int = 8765
     dashboard_port: int = 8770
     screen_capture_target: str = "primary"
@@ -81,6 +82,7 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         primary_light_zone_names=_parse_light_zone_layout(
             get_value("PRIMARY_LIGHT_ZONE_NAMES", "top-center,bottom-left")
         ),
+        ambience_near_lights=_parse_light_zone_layout(get_value("AMBIENCE_NEAR_LIGHTS", "")),
         zone_ui_port=int(get_value("ZONE_UI_PORT", "8765")),
         dashboard_port=int(get_value("DASHBOARD_PORT", "8770")),
         screen_capture_target=get_value("SCREEN_CAPTURE_TARGET", "primary"),
@@ -190,10 +192,21 @@ def _resolve_path(path: Path, base_dir: Path) -> Path:
 def _validate_settings(settings: Settings) -> None:
     if settings.light_zone_layout and len(settings.light_zone_layout) != len(settings.light_entities):
         raise ValueError("LIGHT_ZONE_LAYOUT must contain one zone name per configured light entity")
-    if settings.color_sync_mode not in {"zoned", "shared-variant"}:
-        raise ValueError("COLOR_SYNC_MODE must be 'zoned' or 'shared-variant'")
+    if settings.color_sync_mode not in {"zoned", "shared-variant", "ambience"}:
+        raise ValueError("COLOR_SYNC_MODE must be 'zoned', 'shared-variant', or 'ambience'")
     if settings.color_sync_mode == "shared-variant" and not settings.primary_light_zone_names:
         raise ValueError("PRIMARY_LIGHT_ZONE_NAMES must contain at least one zone name when COLOR_SYNC_MODE=shared-variant")
+    if settings.color_sync_mode == "ambience" and settings.ambience_near_lights:
+        unknown_near_lights = [
+            entity_id
+            for entity_id in settings.ambience_near_lights
+            if entity_id not in settings.light_entities
+        ]
+        if unknown_near_lights:
+            raise ValueError(
+                "AMBIENCE_NEAR_LIGHTS contains entities not in HA_LIGHT_ENTITIES: "
+                + ", ".join(unknown_near_lights)
+            )
     capture_target = settings.screen_capture_target.strip().lower()
     if capture_target != "primary" and capture_target != "all":
         try:

@@ -22,7 +22,7 @@ Instead of adding another lighting server or streaming stack, MatterLights captu
 
 ## Highlights
 
-- Whole-screen, zoned, and shared-variant sync modes.
+- Ambience engine that renders the screen's overall light as a weighted palette across near/far bulb groups, plus the older zoned and shared-variant modes.
 - Autonomous (screen-driven) and custom (static color or looping pattern) playback modes, switchable live from the dashboard.
 - OLED-aware dark detection so black scenes can drop the lights to off.
 - Display-sleep aware: when the monitor powers off, the lights follow it off.
@@ -125,6 +125,19 @@ Manual start:
 powershell -ExecutionPolicy Bypass -File .\scripts\start-zone-ui.ps1
 ```
 
+## Ambience mode (recommended)
+
+`COLOR_SYNC_MODE=ambience` replaces "what is the strongest color on screen?" with "if the screen were the only light source in the room, what would the room look like?" The older dominant-color engines weight vivid pixels so heavily that a small bright-red patch on an otherwise muted frame paints the whole room red; ambience mode weights colors by the light they actually contribute — screen area times brightness, with only a mild lift for saturation — so that patch earns, at most, a single accent bulb.
+
+Each frame is clustered into a small weighted palette, then rendered by two physical light groups:
+
+- **Near group** — the bulbs beside the screen. They carry the palette's strongest components: the screen's glow.
+- **Far group** — the bulbs deeper in the room. Their slots are shared out across the palette in proportion to weight, so their additive blend reproduces the frame's overall balance. A frame that averages to a muddy brown is rendered as its live components — some amber, some teal — whose mix *is* that brown, instead of six bulbs all showing the same flat average.
+
+Bulb assignments are matched against what each bulb showed last frame, so a near-tie flip in the palette does not make two bulbs trade colors.
+
+Set the near group with `AMBIENCE_NEAR_LIGHTS` (comma-separated entity IDs). If unset, the `PRIMARY_LIGHT_ZONE_NAMES` mapping is reused, and failing that, the first two entities. Zones and the zone designer are not used in this mode.
+
 ## Playback modes
 
 MatterLights has two playback modes, switchable live from the **Playback Mode** panel on the dashboard. The choice is written to `CONTROL_STATE_FILE` and the running sync loop picks it up automatically (no restart needed).
@@ -214,7 +227,8 @@ The app reads `.env` first and falls back to shell environment variables. The mo
 | `RESPECT_DISPLAY_SLEEP` | `true` to turn lights off when the monitor sleeps. |
 | `TURN_OFF_ON_SHUTDOWN` | `true` to turn lights off when Windows shuts down, restarts, or logs off. |
 | `MAX_PATTERN_TRANSITION_SECONDS` | Caps custom pattern fades; `0` snaps (safe for Matter bulbs that freeze on transitions). |
-| `COLOR_SYNC_MODE` | `zoned` or `shared-variant`. |
+| `COLOR_SYNC_MODE` | `ambience` (recommended), `zoned`, or `shared-variant`. |
+| `AMBIENCE_NEAR_LIGHTS` | Entity IDs of the bulbs beside the screen (ambience mode's near group). |
 | `PRIMARY_LIGHT_ZONE_NAMES` | Primary bulbs used in shared-variant mode. |
 | `SCREEN_CAPTURE_TARGET` | Default screen: `primary`, `all`, or a 1-based monitor index. Overridable live from the dashboard. |
 | `SYNC_INTERVAL_SECONDS` | Capture cadence. Lower is faster and heavier. |

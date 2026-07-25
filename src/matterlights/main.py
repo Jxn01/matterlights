@@ -8,6 +8,7 @@ import time
 
 from mss import MSS
 
+from matterlights.ambience import build_ambience_zone_samples, resolve_near_entity_ids
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
@@ -19,8 +20,9 @@ from matterlights.screen import (
     RgbColor,
     ScreenZone,
     ZoneSample,
-    capture_zone_samples_with_session,
+    capture_raw_with_session,
     load_configured_light_zones,
+    sample_zone_samples_from_screenshot,
 )
 
 
@@ -111,6 +113,13 @@ def main() -> int:
         retry_entity_ids.clear()
         custom_player.reset()
 
+    ambience_near_ids = resolve_near_entity_ids(
+        settings.ambience_near_lights,
+        settings.primary_light_zone_names,
+        settings.light_entities,
+        light_zones,
+    )
+
     LOGGER.info(
         "Starting sync in %s mode for %s",
         control_state.mode,
@@ -118,6 +127,12 @@ def main() -> int:
             f"{entity_id}={zone.name}" for entity_id, zone in zip(settings.light_entities, light_zones)
         ),
     )
+    if settings.color_sync_mode == "ambience":
+        LOGGER.info(
+            "Ambience groups: near=%s far=%s",
+            ", ".join(ambience_near_ids),
+            ", ".join(e for e in settings.light_entities if e not in set(ambience_near_ids)),
+        )
 
     try:
         with MSS() as screen_capture_session:
@@ -132,6 +147,12 @@ def main() -> int:
                             settings.light_zone_file,
                         )
                         zone_file_mtime = current_zone_file_mtime
+                        ambience_near_ids = resolve_near_entity_ids(
+                            settings.ambience_near_lights,
+                            settings.primary_light_zone_names,
+                            settings.light_entities,
+                            light_zones,
+                        )
                         LOGGER.info("Reloaded light zone layout")
 
                     current_control_file_mtime = _path_mtime(settings.control_state_file)
@@ -202,14 +223,9 @@ def main() -> int:
                                 )
                     else:
                         capture_target = effective_capture_target(control_state, settings.screen_capture_target)
-                        capture_zones = _capture_zones_for_mode(settings.color_sync_mode, light_zones)
                         try:
-                            captured_zone_samples = capture_zone_samples_with_session(
-                                screen_capture_session,
-                                settings.sample_stride,
-                                settings.color_boost,
-                                capture_target,
-                                capture_zones,
+                            frame_raw, frame_width, frame_height = capture_raw_with_session(
+                                screen_capture_session, capture_target
                             )
                             if capture_fallback_active:
                                 capture_fallback_active = False
@@ -226,19 +242,36 @@ def main() -> int:
                                     capture_target,
                                     settings.screen_capture_target,
                                 )
-                            captured_zone_samples = capture_zone_samples_with_session(
-                                screen_capture_session,
+                            frame_raw, frame_width, frame_height = capture_raw_with_session(
+                                screen_capture_session, settings.screen_capture_target
+                            )
+
+                        if settings.color_sync_mode == "ambience":
+                            zone_samples = build_ambience_zone_samples(
+                                frame_raw,
+                                frame_width,
+                                frame_height,
                                 settings.sample_stride,
                                 settings.color_boost,
-                                settings.screen_capture_target,
-                                capture_zones,
+                                settings.light_entities,
+                                ambience_near_ids,
+                                last_colors,
                             )
-                        zone_samples = _build_effective_zone_samples(
-                            settings.color_sync_mode,
-                            light_zones,
-                            captured_zone_samples,
-                            settings.primary_light_zone_names,
-                        )
+                        else:
+                            captured_zone_samples = sample_zone_samples_from_screenshot(
+                                frame_raw,
+                                frame_width,
+                                frame_height,
+                                settings.sample_stride,
+                                settings.color_boost,
+                                _capture_zones_for_mode(settings.color_sync_mode, light_zones),
+                            )
+                            zone_samples = _build_effective_zone_samples(
+                                settings.color_sync_mode,
+                                light_zones,
+                                captured_zone_samples,
+                                settings.primary_light_zone_names,
+                            )
                         preview_overrides = load_preview_overrides(settings.preview_override_file)
                         desired_states = _build_desired_states(
                             settings.light_entities,

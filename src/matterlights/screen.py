@@ -174,6 +174,13 @@ def capture_zone_samples(
     )
 
 
+def capture_raw_with_session(sct: MSS, capture_target: str = "primary") -> tuple[bytes, int, int]:
+    """Grab one frame and return its raw BGRA buffer plus dimensions."""
+
+    screenshot = _grab_screenshot(sct, capture_target)
+    return screenshot.raw, screenshot.width, screenshot.height
+
+
 def capture_zone_samples_with_session(
     sct: MSS,
     sample_stride: int,
@@ -419,7 +426,7 @@ def _sample_zone(
 
     return ZoneSample(
         zone=zone,
-        color=_boost_saturation(color, color_boost),
+        color=boost_saturation(color, color_boost),
         average_brightness=average_brightness,
         active_ratio=active_ratio,
     )
@@ -500,7 +507,7 @@ def _validate_zone(zone: ScreenZone) -> None:
         raise ValueError(f"Invalid vertical bounds for zone {zone.name}")
 
 
-def _boost_saturation(color: RgbColor, factor: float = 1.45) -> RgbColor:
+def boost_saturation(color: RgbColor, factor: float = 1.45) -> RgbColor:
     if factor == 1.0:
         return color
     midpoint = (color.red + color.green + color.blue) / 3
