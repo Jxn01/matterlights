@@ -56,6 +56,42 @@ class ControlEndpointTests(unittest.TestCase):
                 self.assertEqual(payload["cycleSeconds"], 10.0)
                 self.assertEqual(len(payload["custom"]["pattern"]["steps"]), 3)
 
+    def test_screens_endpoint_lists_attached_monitors(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            env_path = self._env(temp_dir)
+            with patch.dict(os.environ, {"MATTERLIGHTS_ENV_FILE": str(env_path)}, clear=False):
+                payload = dashboard.APP.test_client().get("/api/screens").get_json()
+
+        self.assertGreaterEqual(len(payload["monitors"]), 1)
+        # Index 0 is mss's virtual bounding box; the rest are physical screens.
+        self.assertEqual(payload["monitors"][0]["index"], 0)
+        self.assertEqual(payload["screenCount"], len(payload["monitors"]) - 1)
+        for key in ("index", "left", "top", "width", "height"):
+            self.assertIn(key, payload["monitors"][0])
+
+    def test_selecting_a_screen_persists_and_reports_effective_target(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            env_path = self._env(temp_dir)
+            with patch.dict(os.environ, {"MATTERLIGHTS_ENV_FILE": str(env_path)}, clear=False):
+                client = dashboard.APP.test_client()
+                body = {"mode": "autonomous", "captureTarget": "1", "custom": {"type": "solid"}}
+                self.assertEqual(client.post("/api/control", json=body).status_code, 200)
+
+                payload = client.get("/api/control").get_json()
+                self.assertEqual(payload["captureTarget"], "1")
+                self.assertEqual(payload["effectiveCaptureTarget"], "1")
+
+    def test_selecting_a_missing_screen_returns_400(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            env_path = self._env(temp_dir)
+            with patch.dict(os.environ, {"MATTERLIGHTS_ENV_FILE": str(env_path)}, clear=False):
+                client = dashboard.APP.test_client()
+                body = {"mode": "autonomous", "captureTarget": "99", "custom": {"type": "solid"}}
+                response = client.post("/api/control", json=body)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not attached", response.get_json()["message"])
+
     def test_post_invalid_payload_returns_400(self) -> None:
         with TemporaryDirectory() as temp_dir:
             env_path = self._env(temp_dir)

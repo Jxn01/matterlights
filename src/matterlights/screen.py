@@ -88,10 +88,62 @@ def capture_average_color(
     )[0]
 
 
+def list_monitors() -> list[dict[str, int]]:
+    """Describe every attached screen so the UI can offer a real choice.
+
+    Index 0 is mss's virtual bounding box covering all screens (the ``all``
+    capture target); indexes 1..N are the physical monitors.
+    """
+
+    with MSS() as sct:
+        monitors = [dict(monitor) for monitor in sct.monitors]
+    return [
+        {
+            "index": index,
+            "left": int(monitor.get("left", 0)),
+            "top": int(monitor.get("top", 0)),
+            "width": int(monitor.get("width", 0)),
+            "height": int(monitor.get("height", 0)),
+        }
+        for index, monitor in enumerate(monitors)
+    ]
+
+
 def capture_screen_png(capture_target: str = "primary") -> tuple[bytes, int, int]:
     with MSS() as sct:
         screenshot = _grab_screenshot(sct, capture_target)
     return tools.to_png(screenshot.rgb, screenshot.size), screenshot.width, screenshot.height
+
+
+def capture_screen_thumbnail_png(capture_target: str = "primary", max_width: int = 960) -> tuple[bytes, int, int]:
+    """Capture a screen and shrink it by pixel striding before encoding.
+
+    A 4K frame encodes to ~8 MB of PNG and the whole virtual desktop to ~40 MB,
+    which is far too heavy to hand to a browser for a preview. Nearest-neighbour
+    striding keeps this dependency-free (no Pillow) and is plenty for a thumbnail.
+    """
+
+    with MSS() as sct:
+        screenshot = _grab_screenshot(sct, capture_target)
+
+    width = screenshot.width
+    height = screenshot.height
+    step = max(1, -(-width // max(1, max_width)))
+    if step == 1:
+        return tools.to_png(screenshot.rgb, screenshot.size), width, height
+
+    source = screenshot.rgb
+    row_stride = width * 3
+    columns = range(0, width, step)
+    rows = bytearray()
+    for y_pos in range(0, height, step):
+        row_start = y_pos * row_stride
+        row = source[row_start:row_start + row_stride]
+        rows += b"".join(row[x_pos * 3:x_pos * 3 + 3] for x_pos in columns)
+
+    thumb_width = len(columns)
+    thumb_height = len(range(0, height, step))
+    return tools.to_png(bytes(rows), (thumb_width, thumb_height)), thumb_width, thumb_height
 
 
 def capture_zone_colors(
@@ -250,7 +302,10 @@ def _capture_region(sct: MSS, capture_target: str) -> dict[str, int]:
 
     monitor_index = int(normalized_target)
     if monitor_index >= len(sct.monitors):
-        raise ValueError(f"Monitor index {monitor_index} is not available")
+        raise ValueError(
+            f"Monitor index {monitor_index} is not available "
+            f"({len(sct.monitors) - 1} screen(s) attached)"
+        )
     return dict(sct.monitors[monitor_index])
 
 

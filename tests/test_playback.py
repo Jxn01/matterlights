@@ -16,6 +16,7 @@ from matterlights.playback import (
     control_state_from_payload,
     control_state_to_payload,
     default_control_state,
+    effective_capture_target,
     load_control_state,
     pattern_cycle_seconds,
     pattern_events,
@@ -291,6 +292,33 @@ class SerializationTests(unittest.TestCase):
             {"mode": "custom", "custom": {"type": "solid", "solid": {"mode": "white", "kelvin": 999999}}}
         )
         self.assertEqual(state.custom.solid_kelvin, MAX_KELVIN)
+
+    def test_capture_target_defaults_to_inheriting_the_env_setting(self) -> None:
+        state = control_state_from_payload({"mode": "autonomous"})
+        self.assertIsNone(state.capture_target)
+        self.assertEqual(effective_capture_target(state, "primary"), "primary")
+
+    def test_capture_target_accepts_named_and_indexed_screens(self) -> None:
+        for value, expected in [("primary", "primary"), ("ALL", "all"), ("3", "3"), (2, "2")]:
+            state = control_state_from_payload({"mode": "autonomous", "captureTarget": value})
+            self.assertEqual(state.capture_target, expected)
+        self.assertEqual(effective_capture_target(state, "primary"), "2")
+
+    def test_blank_capture_target_falls_back_to_the_env_default(self) -> None:
+        for value in [None, "", "  ", "default"]:
+            state = control_state_from_payload({"mode": "autonomous", "captureTarget": value})
+            self.assertIsNone(state.capture_target)
+            self.assertEqual(effective_capture_target(state, "all"), "all")
+
+    def test_invalid_capture_targets_are_rejected(self) -> None:
+        for value in ["left-one", "0", "-2"]:
+            with self.assertRaises(ValueError):
+                control_state_from_payload({"mode": "autonomous", "captureTarget": value})
+
+    def test_capture_target_round_trips(self) -> None:
+        state = ControlState(mode=MODE_AUTONOMOUS, capture_target="4", custom=CustomState())
+        restored = control_state_from_payload(control_state_to_payload(state))
+        self.assertEqual(restored.capture_target, "4")
 
     def test_too_many_steps_are_rejected(self) -> None:
         steps = [{"color": [1, 2, 3], "hold": 1, "transition": 0} for _ in range(100)]

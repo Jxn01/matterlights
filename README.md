@@ -154,6 +154,18 @@ The total loop length is the sum of every hold and fade. For example, the dashbo
 
 That is: red for 3s → fade to blue over 1s → blue for 4s → fade to yellow over 2s → loop back to red. The editor shows a live, animated preview of the loop and the computed loop length while you arrange the colors.
 
+### Choosing the capture screen
+
+The **Capture Screen** panel on the dashboard picks which screen autonomous mode samples. It draws your monitors in their real desktop arrangement — click one to select it, or use the dropdown. **Preview** grabs a downscaled thumbnail so you can confirm you picked the right physical screen.
+
+Options are your attached screens, plus:
+
+- **Follow .env default** — use `SCREEN_CAPTURE_TARGET` (the original behavior).
+- **Primary screen** — whichever screen Windows currently calls primary.
+- **All screens combined** — the whole virtual desktop as one image.
+
+The choice is stored in `CONTROL_STATE_FILE`, so it applies immediately without restarting the sync loop, and the zone designer follows it too. If the selected screen is later disconnected or powered off, the sync loop logs a warning and falls back to `SCREEN_CAPTURE_TARGET` until it returns.
+
 ### Screen sleep
 
 When the monitor goes to sleep, the lights turn off in both modes. This is the same idea as OLED dark detection, but it also covers custom mode and is driven by the actual Windows display power state rather than screen content. Set `RESPECT_DISPLAY_SLEEP=false` to keep custom colors on while the screen sleeps.
@@ -194,7 +206,7 @@ The app reads `.env` first and falls back to shell environment variables. The mo
 | `MAX_PATTERN_TRANSITION_SECONDS` | Caps custom pattern fades; `0` snaps (safe for Matter bulbs that freeze on transitions). |
 | `COLOR_SYNC_MODE` | `zoned` or `shared-variant`. |
 | `PRIMARY_LIGHT_ZONE_NAMES` | Primary bulbs used in shared-variant mode. |
-| `SCREEN_CAPTURE_TARGET` | `primary`, `all`, or a 1-based monitor index. |
+| `SCREEN_CAPTURE_TARGET` | Default screen: `primary`, `all`, or a 1-based monitor index. Overridable live from the dashboard. |
 | `SYNC_INTERVAL_SECONDS` | Capture cadence. Lower is faster and heavier. |
 | `MAX_PARALLEL_LIGHT_UPDATES` | Upper bound for concurrent Home Assistant light updates. |
 | `BRIGHTNESS_FLOOR` | Minimum brightness on active updates. |

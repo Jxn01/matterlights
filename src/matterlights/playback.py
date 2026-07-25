@@ -71,6 +71,15 @@ class CustomState:
 class ControlState:
     mode: str = MODE_AUTONOMOUS
     custom: CustomState = field(default_factory=CustomState)
+    # Which screen autonomous mode samples. ``None`` inherits SCREEN_CAPTURE_TARGET
+    # from the environment, so an existing control file keeps its old behaviour.
+    capture_target: str | None = None
+
+
+def effective_capture_target(state: ControlState, default_target: str) -> str:
+    """Resolve which screen to sample: the dashboard choice, else the env default."""
+
+    return state.capture_target or default_target
 
 
 def default_control_state() -> ControlState:
@@ -272,6 +281,7 @@ def control_state_to_payload(state: ControlState) -> dict:
     return {
         "version": 1,
         "mode": state.mode,
+        "captureTarget": state.capture_target,
         "custom": {
             "type": custom.type,
             "brightness": custom.brightness,
@@ -306,6 +316,10 @@ def control_state_from_payload(payload: dict) -> ControlState:
     if mode not in VALID_MODES:
         raise ValueError(f"mode must be one of: {', '.join(sorted(VALID_MODES))}")
 
+    capture_target = _parse_capture_target(
+        payload.get("captureTarget", payload.get("capture_target"))
+    )
+
     custom_payload = payload.get("custom") or {}
     if not isinstance(custom_payload, dict):
         raise ValueError("custom must be an object")
@@ -334,6 +348,7 @@ def control_state_from_payload(payload: dict) -> ControlState:
 
     return ControlState(
         mode=mode,
+        capture_target=capture_target,
         custom=CustomState(
             type=custom_type,
             brightness=brightness,
@@ -355,6 +370,27 @@ def _parse_step(entry: object) -> PatternStep:
         mode=_parse_color_mode(entry.get("mode", COLOR_RGB)),
         kelvin=_parse_kelvin(entry.get("kelvin", DEFAULT_KELVIN)),
     )
+
+
+def _parse_capture_target(value: object) -> str | None:
+    """Normalize a screen selection. ``None`` means 'inherit the env default'."""
+
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text or text == "default":
+        return None
+    if text in {"primary", "all"}:
+        return text
+    try:
+        index = int(text)
+    except ValueError as exc:
+        raise ValueError(
+            "captureTarget must be 'primary', 'all', or a monitor index starting at 1"
+        ) from exc
+    if index < 1:
+        raise ValueError("captureTarget monitor index must be 1 or greater")
+    return str(index)
 
 
 def _parse_color_mode(value: object) -> str:

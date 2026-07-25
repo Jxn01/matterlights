@@ -16,10 +16,12 @@ from matterlights.config import Settings, load_settings
 from matterlights.playback import (
     control_state_from_payload,
     control_state_to_payload,
+    effective_capture_target,
     load_control_state,
     pattern_cycle_seconds,
     save_control_state,
 )
+from matterlights.screen import capture_screen_thumbnail_png, list_monitors
 
 
 APP = Flask(__name__)
@@ -131,7 +133,39 @@ def get_control() -> Response:
     payload["lightCount"] = len(settings.light_entities)
     payload["cycleSeconds"] = round(pattern_cycle_seconds(state.custom.pattern_steps), 3)
     payload["maxPatternTransitionSeconds"] = settings.max_pattern_transition_seconds
+    payload["defaultCaptureTarget"] = settings.screen_capture_target
+    payload["effectiveCaptureTarget"] = effective_capture_target(state, settings.screen_capture_target)
     return jsonify(payload)
+
+
+@APP.get("/api/screens")
+def get_screens() -> Response:
+    settings = load_settings()
+    state = load_control_state(settings.control_state_file)
+    monitors = list_monitors()
+    return jsonify(
+        {
+            "monitors": monitors,
+            "screenCount": max(0, len(monitors) - 1),
+            "defaultCaptureTarget": settings.screen_capture_target,
+            "captureTarget": state.capture_target,
+            "effectiveCaptureTarget": effective_capture_target(state, settings.screen_capture_target),
+        }
+    )
+
+
+@APP.get("/api/screens/preview")
+def get_screen_preview() -> Response | tuple[Response, int]:
+    settings = load_settings()
+    requested = (request.args.get("target") or "").strip().lower()
+    if not requested:
+        state = load_control_state(settings.control_state_file)
+        requested = effective_capture_target(state, settings.screen_capture_target)
+    if requested not in {"primary", "all"} and not requested.isdigit():
+        return jsonify({"ok": False, "message": f"Invalid screen target: {requested}"}), 400
+
+    image_bytes, _, _ = capture_screen_thumbnail_png(requested)
+    return Response(image_bytes, mimetype="image/png")
 
 
 @APP.post("/api/control")
@@ -145,6 +179,20 @@ def set_control() -> tuple[Response, int] | Response:
         state = control_state_from_payload(payload)
     except ValueError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
+
+    if state.capture_target is not None and state.capture_target.isdigit():
+        screen_count = max(0, len(list_monitors()) - 1)
+        if int(state.capture_target) > screen_count:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "message": f"Screen {state.capture_target} is not attached ({screen_count} screen(s) detected)",
+                    }
+                ),
+                400,
+            )
+
     save_control_state(settings.control_state_file, state)
     return jsonify(
         {
@@ -187,7 +235,7 @@ def _build_dashboard_status(settings: Settings) -> dict[str, Any]:
             "sampleStride": settings.sample_stride,
             "parallelUpdates": settings.max_parallel_light_updates,
             "lightCount": len(settings.light_entities),
-            "screenCaptureTarget": settings.screen_capture_target,
+            "screenCaptureTarget": effective_capture_target(control_state, settings.screen_capture_target),
         },
     }
 
@@ -376,6 +424,9 @@ def _run_powershell(script: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        # Without this the status poll flashes a console window several times a
+        # minute for as long as the dashboard page is open.
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or "PowerShell command failed."
@@ -719,6 +770,67 @@ def _page_html() -> str:
     .step-white-control input[type="range"] { flex: 1; accent-color: #cfe0ff; }
     .step-white-control .step-kelvin-val { font-size: 12px; min-width: 44px; }
     .hidden { display: none; }
+    .screen-map {
+      position: relative;
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(2, 6, 23, 0.55);
+      margin: 12px 0 14px;
+      overflow: hidden;
+    }
+    .screen-rect {
+      position: absolute;
+      border: 2px solid rgba(148, 163, 184, 0.5);
+      border-radius: 8px;
+      background: rgba(148, 163, 184, 0.10);
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1.2;
+      text-align: center;
+      overflow: hidden;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .screen-rect:hover { border-color: var(--accent); background: rgba(125, 211, 252, 0.12); }
+    .screen-rect.selected {
+      border-color: var(--accent);
+      background: rgba(125, 211, 252, 0.22);
+      color: var(--text);
+      box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.5);
+    }
+    .screen-rect .n { font-size: 17px; font-weight: 700; }
+    .screen-rect .r { opacity: 0.75; }
+    .screen-controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    select {
+      padding: 9px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.6);
+      color: var(--text);
+      font: inherit;
+      min-width: 260px;
+    }
+    #screenPreviewWrap img {
+      display: block;
+      width: 100%;
+      max-height: 320px;
+      object-fit: contain;
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #02050a;
+    }
     @media (max-width: 1100px) {
       .card, .card.wide {
         grid-column: span 6;
@@ -757,6 +869,21 @@ def _page_html() -> str:
       <article id="zoneUiCard" class="card"></article>
       <article id="haCard" class="card wide"></article>
       <article id="configCard" class="card wide"></article>
+      <article id="screenCard" class="card full">
+        <div class="eyebrow">Capture</div>
+        <div class="title-row">
+          <strong>Capture Screen</strong>
+          <span id="screenBadge"></span>
+        </div>
+        <p class="subtle-sm">Which screen autonomous mode samples for color. Click a screen below, or pick one from the list. Applies immediately — the sync loop reloads it automatically.</p>
+        <div id="screenMap" class="screen-map"></div>
+        <div class="screen-controls">
+          <select id="screenSelect"></select>
+          <button id="previewScreenButton" class="secondary" type="button">Preview</button>
+          <span id="screenStatus" class="muted"></span>
+        </div>
+        <div id="screenPreviewWrap" class="hidden"><img id="screenPreview" alt="Selected screen preview"></div>
+      </article>
       <article id="customCard" class="card full">
         <div class="eyebrow">Playback</div>
         <div class="title-row">
@@ -1347,6 +1474,7 @@ def _page_html() -> str:
       const pattern = custom.pattern || {};
       control = {
         mode: payload.mode || 'autonomous',
+        captureTarget: payload.captureTarget || null,
         custom: {
           type: custom.type || 'solid',
           brightness: custom.brightness || 255,
@@ -1378,10 +1506,10 @@ def _page_html() -> str:
       }
     }
 
-    async function applyControl() {
-      controlStatus.textContent = 'Applying…';
-      const body = {
+    function buildControlBody() {
+      return {
         mode: control.mode,
+        captureTarget: control.captureTarget,
         custom: {
           type: control.custom.type,
           brightness: control.custom.brightness,
@@ -1401,18 +1529,120 @@ def _page_html() -> str:
           },
         },
       };
+    }
+
+    async function postControl() {
+      const payload = await fetchJson('/api/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildControlBody()),
+      });
+      await loadStatus();
+      return payload;
+    }
+
+    async function applyControl() {
+      controlStatus.textContent = 'Applying…';
       try {
-        const payload = await fetchJson('/api/control', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
+        const payload = await postControl();
         controlStatus.textContent = payload.message || 'Applied.';
-        await loadStatus();
       } catch (error) {
         controlStatus.textContent = error.message;
       }
     }
+
+    // ---- Capture screen picker ----
+    const screenMap = document.getElementById('screenMap');
+    const screenSelect = document.getElementById('screenSelect');
+    const screenBadge = document.getElementById('screenBadge');
+    const screenStatus = document.getElementById('screenStatus');
+    const screenPreview = document.getElementById('screenPreview');
+    const screenPreviewWrap = document.getElementById('screenPreviewWrap');
+    const previewScreenButton = document.getElementById('previewScreenButton');
+    let screens = null;
+
+    function currentTarget() {
+      return control && control.captureTarget ? String(control.captureTarget) : '';
+    }
+
+    function targetLabel(value) {
+      if (!value) return `default (${screens ? screens.defaultCaptureTarget : '—'})`;
+      if (value === 'all') return 'all screens';
+      if (value === 'primary') return 'primary screen';
+      return `screen ${value}`;
+    }
+
+    function renderScreenMap() {
+      if (!screens || !screens.monitors.length) return;
+      const virt = screens.monitors[0];
+      screenMap.style.aspectRatio = `${virt.width} / ${virt.height}`;
+      screenMap.innerHTML = '';
+      const selected = currentTarget();
+      screens.monitors.slice(1).forEach((m) => {
+        const el = document.createElement('div');
+        el.className = 'screen-rect' + (selected === String(m.index) ? ' selected' : '');
+        el.style.left = `${((m.left - virt.left) / virt.width) * 100}%`;
+        el.style.top = `${((m.top - virt.top) / virt.height) * 100}%`;
+        el.style.width = `${(m.width / virt.width) * 100}%`;
+        el.style.height = `${(m.height / virt.height) * 100}%`;
+        el.innerHTML = `<span class="n">${m.index}</span><span class="r">${m.width}×${m.height}</span>`;
+        el.title = `Screen ${m.index} — ${m.width}×${m.height} at (${m.left}, ${m.top})`;
+        el.addEventListener('click', () => selectScreen(String(m.index)));
+        screenMap.append(el);
+      });
+    }
+
+    function renderScreenSelect() {
+      if (!screens) return;
+      const virt = screens.monitors[0] || { width: 0, height: 0 };
+      const options = [
+        { value: '', label: `Follow .env default (${screens.defaultCaptureTarget})` },
+        { value: 'primary', label: 'Primary screen' },
+        { value: 'all', label: `All screens combined (${virt.width}×${virt.height})` },
+      ];
+      screens.monitors.slice(1).forEach((m) => {
+        options.push({ value: String(m.index), label: `Screen ${m.index} — ${m.width}×${m.height}` });
+      });
+      const selected = currentTarget();
+      screenSelect.innerHTML = options
+        .map((o) => `<option value="${escapeHtml(o.value)}"${o.value === selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`)
+        .join('');
+      screenBadge.innerHTML = `<span class="badge good">Capturing ${escapeHtml(targetLabel(selected))}</span>`;
+    }
+
+    async function selectScreen(value) {
+      if (!control) return;
+      const previous = control.captureTarget;
+      control.captureTarget = value === '' ? null : value;
+      renderScreenMap();
+      renderScreenSelect();
+      screenStatus.textContent = 'Applying…';
+      try {
+        await postControl();
+        screenStatus.textContent = `Now capturing ${targetLabel(currentTarget())}.`;
+        if (!screenPreviewWrap.classList.contains('hidden')) showScreenPreview();
+      } catch (error) {
+        control.captureTarget = previous;
+        renderScreenMap();
+        renderScreenSelect();
+        screenStatus.textContent = error.message;
+      }
+    }
+
+    function showScreenPreview() {
+      const target = currentTarget() || (screens ? screens.defaultCaptureTarget : 'primary');
+      screenPreviewWrap.classList.remove('hidden');
+      screenPreview.src = `/api/screens/preview?target=${encodeURIComponent(target)}&ts=${Date.now()}`;
+    }
+
+    async function loadScreens() {
+      screens = await fetchJson('/api/screens');
+      renderScreenMap();
+      renderScreenSelect();
+    }
+
+    screenSelect.addEventListener('change', () => selectScreen(screenSelect.value));
+    previewScreenButton.addEventListener('click', showScreenPreview);
 
     document.getElementById('refreshLogsButton').addEventListener('click', () => {
       loadLogs().catch((error) => {
@@ -1420,7 +1650,8 @@ def _page_html() -> str:
       });
     });
 
-    Promise.all([loadStatus(), loadLogs(), loadControl()]).catch((error) => {
+    // loadScreens renders against `control`, so it must run after loadControl.
+    Promise.all([loadStatus(), loadLogs(), loadControl().then(loadScreens)]).catch((error) => {
       statusBar.textContent = error.message;
     });
     setInterval(() => {

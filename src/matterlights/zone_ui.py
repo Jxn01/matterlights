@@ -8,6 +8,7 @@ from flask import Flask, Response, jsonify, request
 
 from matterlights.config import load_settings
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
+from matterlights.playback import effective_capture_target, load_control_state
 from matterlights.preview import activate_preview_override
 from matterlights.screen import RgbColor, ScreenZone, capture_screen_png, load_configured_light_zones, save_light_zones
 
@@ -24,11 +25,12 @@ def index() -> str:
 @APP.get("/api/config")
 def get_config() -> Response:
     settings = load_settings()
-    _, width, height = capture_screen_png(settings.screen_capture_target)
+    capture_target = _capture_target(settings)
+    _, width, height = capture_screen_png(capture_target)
     zones = load_configured_light_zones(settings.light_zone_layout, settings.light_entities, settings.light_zone_file)
     return jsonify(
         {
-            "captureTarget": settings.screen_capture_target,
+            "captureTarget": capture_target,
             "zoneFile": str(settings.light_zone_file) if settings.light_zone_file is not None else "",
             "width": width,
             "height": height,
@@ -50,8 +52,17 @@ def get_config() -> Response:
 @APP.get("/api/screenshot")
 def get_screenshot() -> Response:
     settings = load_settings()
-    image_bytes, _, _ = capture_screen_png(settings.screen_capture_target)
+    image_bytes, _, _ = capture_screen_png(_capture_target(settings))
     return Response(image_bytes, mimetype="image/png")
+
+
+def _capture_target(settings) -> str:
+    # Follow the screen picked on the dashboard so zones are drawn on the screen
+    # the sync loop actually samples.
+    return effective_capture_target(
+        load_control_state(settings.control_state_file),
+        settings.screen_capture_target,
+    )
 
 
 @APP.post("/api/save")

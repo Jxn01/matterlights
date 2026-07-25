@@ -11,7 +11,7 @@ from mss import MSS
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
-from matterlights.playback import MODE_CUSTOM, CustomPlayer, load_control_state
+from matterlights.playback import MODE_CUSTOM, CustomPlayer, effective_capture_target, load_control_state
 from matterlights.process_lock import acquire_sync_singleton
 from matterlights.preview import load_preview_overrides
 from matterlights.screen import (
@@ -92,6 +92,7 @@ def main() -> int:
     unavailable_entity_ids: set[str] = set()
     next_availability_refresh = 0.0
     display_off_active = False
+    capture_fallback_active = False
     display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
 
     def reset_runtime_caches() -> None:
@@ -128,6 +129,12 @@ def main() -> int:
                         new_control_state = load_control_state(settings.control_state_file)
                         if new_control_state.mode != control_state.mode:
                             LOGGER.info("Playback mode set to %s", new_control_state.mode)
+                        if new_control_state.capture_target != control_state.capture_target:
+                            LOGGER.info(
+                                "Capture screen set to %s",
+                                new_control_state.capture_target or f"{settings.screen_capture_target} (default)",
+                            )
+                            capture_fallback_active = False
                         control_state = new_control_state
                         control_file_mtime = current_control_file_mtime
                         reset_runtime_caches()
@@ -184,13 +191,38 @@ def main() -> int:
                                     ", ".join(failed_entity_ids),
                                 )
                     else:
-                        captured_zone_samples = capture_zone_samples_with_session(
-                            screen_capture_session,
-                            settings.sample_stride,
-                            settings.color_boost,
-                            settings.screen_capture_target,
-                            _capture_zones_for_mode(settings.color_sync_mode, light_zones),
-                        )
+                        capture_target = effective_capture_target(control_state, settings.screen_capture_target)
+                        capture_zones = _capture_zones_for_mode(settings.color_sync_mode, light_zones)
+                        try:
+                            captured_zone_samples = capture_zone_samples_with_session(
+                                screen_capture_session,
+                                settings.sample_stride,
+                                settings.color_boost,
+                                capture_target,
+                                capture_zones,
+                            )
+                            if capture_fallback_active:
+                                capture_fallback_active = False
+                                LOGGER.info("Capture screen %s is available again", capture_target)
+                        except ValueError:
+                            # The selected screen went away (unplugged/turned off). Keep the
+                            # lights alive on the configured default instead of stalling.
+                            if capture_target == settings.screen_capture_target:
+                                raise
+                            if not capture_fallback_active:
+                                capture_fallback_active = True
+                                LOGGER.warning(
+                                    "Capture screen %s is unavailable; falling back to %s",
+                                    capture_target,
+                                    settings.screen_capture_target,
+                                )
+                            captured_zone_samples = capture_zone_samples_with_session(
+                                screen_capture_session,
+                                settings.sample_stride,
+                                settings.color_boost,
+                                settings.screen_capture_target,
+                                capture_zones,
+                            )
                         zone_samples = _build_effective_zone_samples(
                             settings.color_sync_mode,
                             light_zones,
