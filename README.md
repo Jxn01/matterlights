@@ -26,6 +26,7 @@ Instead of adding another lighting server or streaming stack, MatterLights captu
 - Autonomous (screen-driven) and custom (static color or looping pattern) playback modes, switchable live from the dashboard.
 - OLED-aware dark detection so black scenes can drop the lights to off.
 - Display-sleep aware: when the monitor powers off, the lights follow it off.
+- Turns the lights off when Windows shuts down, so the room does not stay lit.
 - Saturation and dominant-color tuning aimed at vivid ambient lighting rather than washed-out averages.
 - Local dashboard at `http://127.0.0.1:8770` for status, logs, and service restarts.
 - Zone designer at `http://127.0.0.1:8765` with screenshot overlays and a flash-selected-bulb action.
@@ -168,6 +169,14 @@ The choice is stored in `CONTROL_STATE_FILE`, so it applies immediately without 
 
 ### Screen sleep
 
+### Shutdown
+
+When Windows shuts down, restarts, or logs off, the lights are turned off on the way out, so you are not left with a lit room after the PC is gone. Set `TURN_OFF_ON_SHUTDOWN=false` to leave them as they were.
+
+Windows only allows a few seconds for this, so it is deliberately a single grouped Home Assistant request. If Home Assistant is unreachable at that moment the shutdown still proceeds normally — it is never blocked.
+
+### Screen sleep
+
 When the monitor goes to sleep, the lights turn off in both modes. This is the same idea as OLED dark detection, but it also covers custom mode and is driven by the actual Windows display power state rather than screen content. Set `RESPECT_DISPLAY_SLEEP=false` to keep custom colors on while the screen sleeps.
 
 ## Windows autostart
@@ -203,6 +212,7 @@ The app reads `.env` first and falls back to shell environment variables. The mo
 | `LIGHT_ZONE_LAYOUT` | Ordered zone names matched to `HA_LIGHT_ENTITIES`. |
 | `CONTROL_STATE_FILE` | Where the playback mode (autonomous/custom) and pattern are stored. |
 | `RESPECT_DISPLAY_SLEEP` | `true` to turn lights off when the monitor sleeps. |
+| `TURN_OFF_ON_SHUTDOWN` | `true` to turn lights off when Windows shuts down, restarts, or logs off. |
 | `MAX_PATTERN_TRANSITION_SECONDS` | Caps custom pattern fades; `0` snaps (safe for Matter bulbs that freeze on transitions). |
 | `COLOR_SYNC_MODE` | `zoned` or `shared-variant`. |
 | `PRIMARY_LIGHT_ZONE_NAMES` | Primary bulbs used in shared-variant mode. |

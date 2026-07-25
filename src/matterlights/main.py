@@ -13,6 +13,7 @@ from matterlights.display_power import start_display_monitor
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
 from matterlights.playback import MODE_CUSTOM, CustomPlayer, effective_capture_target, load_control_state
 from matterlights.process_lock import acquire_sync_singleton
+from matterlights.shutdown_hook import start_shutdown_hook
 from matterlights.preview import load_preview_overrides
 from matterlights.screen import (
     RgbColor,
@@ -94,6 +95,15 @@ def main() -> int:
     display_off_active = False
     capture_fallback_active = False
     display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
+
+    def turn_off_all_lights() -> None:
+        # Windows allows only a few seconds here. Every light gets identical
+        # parameters, so this collapses into a single Home Assistant request.
+        client.turn_off_lights(list(settings.light_entities), 0.0)
+
+    shutdown_hook = (
+        start_shutdown_hook(turn_off_all_lights, LOGGER) if settings.turn_off_on_shutdown else None
+    )
 
     def reset_runtime_caches() -> None:
         last_colors.clear()
@@ -287,6 +297,8 @@ def main() -> int:
     finally:
         if display_monitor is not None:
             display_monitor.stop()
+        if shutdown_hook is not None:
+            shutdown_hook.stop()
         sync_lock.release()
 
 

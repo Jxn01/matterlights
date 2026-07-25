@@ -15,6 +15,7 @@ class Settings:
     preview_override_file: Path | None = None
     control_state_file: Path | None = None
     respect_display_sleep: bool = True
+    turn_off_on_shutdown: bool = True
     color_sync_mode: str = "zoned"
     primary_light_zone_names: list[str] = field(default_factory=list)
     zone_ui_port: int = 8765
@@ -75,6 +76,7 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
             path_base_dir,
         ),
         respect_display_sleep=_parse_bool(get_value("RESPECT_DISPLAY_SLEEP", "true")),
+        turn_off_on_shutdown=_parse_bool(get_value("TURN_OFF_ON_SHUTDOWN", "true")),
         color_sync_mode=get_value("COLOR_SYNC_MODE", "zoned").strip().lower(),
         primary_light_zone_names=_parse_light_zone_layout(
             get_value("PRIMARY_LIGHT_ZONE_NAMES", "top-center,bottom-left")
