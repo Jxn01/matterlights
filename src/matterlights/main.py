@@ -96,6 +96,7 @@ def main() -> int:
     next_availability_refresh = 0.0
     display_off_active = False
     capture_fallback_active = False
+    screen_dark_active = False
     display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
 
     def turn_off_all_lights() -> None:
@@ -272,6 +273,21 @@ def main() -> int:
                                 captured_zone_samples,
                                 settings.primary_light_zone_names,
                             )
+                        # Edge-triggered, like the display-sleep events: dark detection
+                        # otherwise turns the lights off in silence, which reads as a crash.
+                        screen_dark = bool(zone_samples) and all(
+                            sample.should_turn_off(
+                                settings.dark_threshold, settings.dark_active_ratio_threshold
+                            )
+                            for sample in zone_samples
+                        )
+                        if screen_dark != screen_dark_active:
+                            screen_dark_active = screen_dark
+                            if screen_dark:
+                                LOGGER.info("Watched screen (%s) went dark; turning lights off", capture_target)
+                            else:
+                                LOGGER.info("Watched screen (%s) is active again; restoring lights", capture_target)
+
                         preview_overrides = load_preview_overrides(settings.preview_override_file)
                         desired_states = _build_desired_states(
                             settings.light_entities,
