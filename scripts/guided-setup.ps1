@@ -1,5 +1,5 @@
 param(
-    [string]$HaUrl = "http://192.168.1.2:8123"
+    [string]$HaUrl = "http://192.168.10.2:8123"
 )
 
 $ErrorActionPreference = "Stop"

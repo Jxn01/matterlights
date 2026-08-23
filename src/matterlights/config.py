@@ -60,7 +60,7 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         raise ValueError("HA_LIGHT_ENTITIES must contain at least one light entity ID")
 
     settings = Settings(
-        ha_url=get_value("HA_URL", "http://192.168.1.2:8123").rstrip("/"),
+        ha_url=get_value("HA_URL", "http://192.168.10.2:8123").rstrip("/"),
         ha_token=get_value("HA_TOKEN"),
         light_entities=light_entities,
         light_zone_layout=_parse_light_zone_layout(get_value("LIGHT_ZONE_LAYOUT", "")),
