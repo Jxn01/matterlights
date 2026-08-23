@@ -97,6 +97,7 @@ def main() -> int:
     display_off_active = False
     capture_fallback_active = False
     screen_dark_active = False
+    master_off_active = False
     display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
 
     def turn_off_all_lights() -> None:
@@ -188,12 +189,24 @@ def main() -> int:
                         display_off_active = False
                         reset_runtime_caches()
                         LOGGER.info("Display resumed; restoring lights")
+                    if master_off_active and control_state.lights_on:
+                        master_off_active = False
+                        reset_runtime_caches()
+                        LOGGER.info("Lights switched on from the dashboard; resuming")
 
                     ordered_available = [
                         entity_id for entity_id in settings.light_entities if entity_id in available_entity_ids
                     ]
 
-                    if not display_on:
+                    if not control_state.lights_on:
+                        # Master switch: off overrides every mode until re-enabled.
+                        if not master_off_active:
+                            if ordered_available:
+                                client.turn_off_lights(ordered_available, settings.transition_seconds)
+                            master_off_active = True
+                            reset_runtime_caches()
+                            LOGGER.info("Lights switched off from the dashboard")
+                    elif not display_on:
                         if not display_off_active:
                             if ordered_available:
                                 client.turn_off_lights(ordered_available, settings.transition_seconds)

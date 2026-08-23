@@ -320,6 +320,20 @@ class SerializationTests(unittest.TestCase):
         restored = control_state_from_payload(control_state_to_payload(state))
         self.assertEqual(restored.capture_target, "4")
 
+    def test_lights_on_defaults_true_for_legacy_payloads(self) -> None:
+        state = control_state_from_payload({"mode": "autonomous"})
+        self.assertTrue(state.lights_on)
+
+    def test_lights_off_round_trips(self) -> None:
+        state = ControlState(mode=MODE_AUTONOMOUS, lights_on=False, custom=CustomState())
+        restored = control_state_from_payload(control_state_to_payload(state))
+        self.assertFalse(restored.lights_on)
+
+    def test_lights_on_parses_string_forms(self) -> None:
+        for value, expected in [("false", False), ("0", False), ("off", False), ("true", True), (False, False), (True, True)]:
+            state = control_state_from_payload({"mode": "autonomous", "lightsOn": value})
+            self.assertEqual(state.lights_on, expected, f"value={value!r}")
+
     def test_too_many_steps_are_rejected(self) -> None:
         steps = [{"color": [1, 2, 3], "hold": 1, "transition": 0} for _ in range(100)]
         with self.assertRaisesRegex(ValueError, "at most"):

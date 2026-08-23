@@ -81,6 +81,20 @@ class ControlEndpointTests(unittest.TestCase):
                 self.assertEqual(payload["captureTarget"], "1")
                 self.assertEqual(payload["effectiveCaptureTarget"], "1")
 
+    def test_master_switch_persists_through_the_control_endpoint(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            env_path = self._env(temp_dir)
+            with patch.dict(os.environ, {"MATTERLIGHTS_ENV_FILE": str(env_path)}, clear=False):
+                client = dashboard.APP.test_client()
+                body = {"mode": "autonomous", "lightsOn": False, "custom": {"type": "solid"}}
+                self.assertEqual(client.post("/api/control", json=body).status_code, 200)
+                payload = client.get("/api/control").get_json()
+                self.assertFalse(payload["lightsOn"])
+
+                body["lightsOn"] = True
+                client.post("/api/control", json=body)
+                self.assertTrue(client.get("/api/control").get_json()["lightsOn"])
+
     def test_selecting_a_missing_screen_returns_400(self) -> None:
         with TemporaryDirectory() as temp_dir:
             env_path = self._env(temp_dir)

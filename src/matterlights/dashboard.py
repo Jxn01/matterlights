@@ -448,6 +448,7 @@ def _page_html() -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>__TITLE__</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%92%A1%3C/text%3E%3C/svg%3E">
   <style>
     :root {
       --bg: #0d1117;
@@ -518,6 +519,16 @@ def _page_html() -> str:
       background: rgba(148, 163, 184, 0.14);
       border: 1px solid var(--line);
     }
+    button.power {
+      color: #052e1b;
+      background: linear-gradient(135deg, #34d399, #a7f3d0);
+      min-width: 150px;
+    }
+    button.power.power-off {
+      color: #fff;
+      background: linear-gradient(135deg, #fb7185, #e11d48);
+    }
+    button.power:disabled { opacity: 0.5; cursor: default; }
     .status-bar {
       min-height: 24px;
       color: var(--muted);
@@ -858,6 +869,7 @@ def _page_html() -> str:
         <p class="subtle">Monitor the screen sync task, Home Assistant reachability, the zone designer process, and recent logs. Use this page to restart the parts that matter without opening Task Scheduler or PowerShell.</p>
       </div>
       <div class="links">
+        <button id="powerToggle" class="power" type="button" disabled>Lights: …</button>
         <a id="dashboardLink" class="primary" href="#">Dashboard</a>
         <a id="zoneUiLink" class="primary" href="#" target="_blank" rel="noreferrer">Open Zone Designer</a>
       </div>
@@ -1421,6 +1433,7 @@ def _page_html() -> str:
       solidKelvinInput.value = String(control.custom.solid.kelvin);
       solidKelvinValue.textContent = `${control.custom.solid.kelvin}K`;
 
+      renderPowerToggle();
       renderFadeNote();
       renderSteps();
       renderDerived();
@@ -1475,6 +1488,7 @@ def _page_html() -> str:
       control = {
         mode: payload.mode || 'autonomous',
         captureTarget: payload.captureTarget || null,
+        lightsOn: payload.lightsOn !== false,
         custom: {
           type: custom.type || 'solid',
           brightness: custom.brightness || 255,
@@ -1510,6 +1524,7 @@ def _page_html() -> str:
       return {
         mode: control.mode,
         captureTarget: control.captureTarget,
+        lightsOn: control.lightsOn,
         custom: {
           type: control.custom.type,
           brightness: control.custom.brightness,
@@ -1550,6 +1565,34 @@ def _page_html() -> str:
         controlStatus.textContent = error.message;
       }
     }
+
+    // ---- Master power toggle ----
+    const powerToggle = document.getElementById('powerToggle');
+
+    function renderPowerToggle() {
+      if (!control) return;
+      powerToggle.disabled = false;
+      const on = control.lightsOn !== false;
+      powerToggle.textContent = on ? 'Lights: On' : 'Lights: Off';
+      powerToggle.classList.toggle('power-off', !on);
+    }
+
+    powerToggle.addEventListener('click', async () => {
+      const wasOn = control.lightsOn !== false;
+      control.lightsOn = !wasOn;
+      renderPowerToggle();
+      statusBar.textContent = control.lightsOn ? 'Switching lights on…' : 'Switching lights off…';
+      try {
+        await postControl();
+        statusBar.textContent = control.lightsOn
+          ? 'Lights on — resuming playback.'
+          : 'Lights off — stays off (even across reboots) until switched back on.';
+      } catch (error) {
+        control.lightsOn = wasOn;
+        renderPowerToggle();
+        statusBar.textContent = error.message;
+      }
+    });
 
     // ---- Capture screen picker ----
     const screenMap = document.getElementById('screenMap');

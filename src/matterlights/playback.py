@@ -74,6 +74,10 @@ class ControlState:
     # Which screen autonomous mode samples. ``None`` inherits SCREEN_CAPTURE_TARGET
     # from the environment, so an existing control file keeps its old behaviour.
     capture_target: str | None = None
+    # Master power switch from the dashboard. ``False`` keeps every light off,
+    # regardless of mode, until switched back on; it lives in the control file,
+    # so it survives reboots of both the PC and the sync loop.
+    lights_on: bool = True
 
 
 def effective_capture_target(state: ControlState, default_target: str) -> str:
@@ -282,6 +286,7 @@ def control_state_to_payload(state: ControlState) -> dict:
         "version": 1,
         "mode": state.mode,
         "captureTarget": state.capture_target,
+        "lightsOn": state.lights_on,
         "custom": {
             "type": custom.type,
             "brightness": custom.brightness,
@@ -319,6 +324,7 @@ def control_state_from_payload(payload: dict) -> ControlState:
     capture_target = _parse_capture_target(
         payload.get("captureTarget", payload.get("capture_target"))
     )
+    lights_on = _parse_lights_on(payload.get("lightsOn", payload.get("lights_on", True)))
 
     custom_payload = payload.get("custom") or {}
     if not isinstance(custom_payload, dict):
@@ -349,6 +355,7 @@ def control_state_from_payload(payload: dict) -> ControlState:
     return ControlState(
         mode=mode,
         capture_target=capture_target,
+        lights_on=lights_on,
         custom=CustomState(
             type=custom_type,
             brightness=brightness,
@@ -370,6 +377,12 @@ def _parse_step(entry: object) -> PatternStep:
         mode=_parse_color_mode(entry.get("mode", COLOR_RGB)),
         kelvin=_parse_kelvin(entry.get("kelvin", DEFAULT_KELVIN)),
     )
+
+
+def _parse_lights_on(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() not in {"false", "0", "off", "no", ""}
+    return bool(value)
 
 
 def _parse_capture_target(value: object) -> str | None:
