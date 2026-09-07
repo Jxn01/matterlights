@@ -31,6 +31,12 @@ classifiers = [
     "Topic :: Multimedia :: Graphics",
 ]
 dependencies = [
+    # dxcam gives DXGI Desktop Duplication capture. mss is kept as the fallback
+    # for targets Desktop Duplication cannot serve (the whole virtual desktop,
+    # or two screens sharing a resolution) and for PNG previews.
+    # Sustained GDI readback via mss mis-draws the mouse cursor on this rig --
+    # see the capture-backend notes at the top of screen.py.
+    "dxcam>=0.3.0",
     "flask>=3.1.0",
     "mss>=10.1.0",
     "requests>=2.32.0",
