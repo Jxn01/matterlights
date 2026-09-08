@@ -90,6 +90,25 @@ class CaptureBackend(Protocol):
 
 _BACKEND: CaptureBackend | None = None
 _BACKEND_LOCK = threading.Lock()
+_SYNC_INTERVAL_SECONDS = 0.2
+_FALLBACK_TARGET: str | None = None
+
+
+def configure(sync_interval_seconds: float, fallback_target: str) -> None:
+    """Hand the backend the two settings it cannot discover for itself.
+
+    ``sync_interval_seconds`` sets the Linux stream's frame-rate cap, and
+    ``fallback_target`` is the screen to use when the selected one is unplugged.
+    Called once at startup, before the backend is built; a backend already in
+    existence is dropped so it picks the new values up.
+    """
+
+    global _SYNC_INTERVAL_SECONDS, _FALLBACK_TARGET
+    if (sync_interval_seconds, fallback_target) == (_SYNC_INTERVAL_SECONDS, _FALLBACK_TARGET):
+        return
+    _SYNC_INTERVAL_SECONDS = sync_interval_seconds
+    _FALLBACK_TARGET = fallback_target
+    reset_backend()
 
 
 def get_backend() -> CaptureBackend:
@@ -127,7 +146,10 @@ def _create_backend() -> CaptureBackend:
 
     from matterlights.capture.linux import LinuxCaptureBackend
 
-    return LinuxCaptureBackend()
+    backend = LinuxCaptureBackend(sync_interval_seconds=_SYNC_INTERVAL_SECONDS)
+    if _FALLBACK_TARGET:
+        backend.set_fallback_target(_FALLBACK_TARGET)
+    return backend
 
 
 # ---------------------------------------------------------------------------

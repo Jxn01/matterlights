@@ -6,6 +6,7 @@ import logging
 import time
 
 from matterlights.ambience import build_ambience_zone_samples, resolve_near_entity_ids
+from matterlights import capture as _capture
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
@@ -99,6 +100,11 @@ def main() -> int:
 
     settings = load_settings()
     configure_logging(settings.log_path)
+
+    # The capture backend needs the sync cadence (it caps the stream's frame
+    # rate from it) and the configured default screen (to fall back to when the
+    # selected one is unplugged). Neither is discoverable from inside capture.
+    _capture.configure(settings.sync_interval_seconds, settings.screen_capture_target)
 
     sync_lock = acquire_sync_singleton(LOGGER)
     if sync_lock is None:

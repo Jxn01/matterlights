@@ -1,0 +1,35 @@
+# MatterLights screen-to-light sync (USER unit).
+#
+# Installed by scripts/linux/install.sh, which substitutes @INSTALL_DIR@.
+[Unit]
+Description=MatterLights screen-to-light sync
+Documentation=https://github.com/Jxn01/matterlights
+
+# PartOf is load-bearing, not decoration. Lingering is commonly enabled on this
+# machine, and a user unit on default.target would then SURVIVE LOGOUT -- screen
+# capture dead because the compositor is gone, lights stuck on the last colour
+# they were given. PartOf ties this unit's life to the graphical session, so
+# logging out stops it, which sends SIGTERM, which turns the lights off.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=@INSTALL_DIR@
+Environment=MATTERLIGHTS_ENV_FILE=@INSTALL_DIR@/.env
+ExecStart=@INSTALL_DIR@/.venv/bin/python -m matterlights
+Restart=on-failure
+RestartSec=5
+
+# Longer than SESSION_END_TIMEOUT_SECONDS (default 10s) plus margin, so the
+# SIGTERM handler has time to get one turn-off request to Home Assistant before
+# systemd escalates to SIGKILL.
+TimeoutStopSec=20
+KillSignal=SIGTERM
+
+SyslogIdentifier=matterlights-sync
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

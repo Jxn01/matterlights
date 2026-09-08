@@ -1,0 +1,49 @@
+# Turn the lights off when the machine shuts down or reboots (SYSTEM unit).
+#
+# WHY A SYSTEM UNIT AND NOT A USER ONE. This is the same lesson the Windows side
+# paid for. There, an ordinary interactive scheduled task triggered correctly on
+# shutdown and then died with 0xC000026B, STATUS_DLL_INIT_FAILED_LOGOFF: the
+# session was already being destroyed, so no process could start in it. Only a
+# task running as SYSTEM, in session 0, actually fired.
+#
+# The Linux mirror is exact: a USER unit dies with the session, so it cannot be
+# the thing that reports the session dying. This runs in the system manager,
+# which is still alive at that point.
+#
+# HOW IT FIRES. There is no ExecStart worth running -- the work is all in
+# ExecStop. systemd stops units in REVERSE dependency order, so ordering this
+# after network-online.target means it stops BEFORE the network goes down, which
+# is the whole trick: the turn-off request needs a working network.
+#
+# Installed by scripts/linux/install.sh, which substitutes @INSTALL_DIR@.
+[Unit]
+Description=Turn MatterLights bulbs off at shutdown
+Documentation=https://github.com/Jxn01/matterlights
+After=network-online.target
+Wants=network-online.target
+
+# .env lives in the user's home. Without this the unit could be stopped after
+# /home is unmounted, and the token it needs would be gone.
+RequiresMountsFor=@INSTALL_DIR@
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# REQUIRED, not decoration. This runs as root with a working directory of /, so
+# relative .env discovery finds nothing. It would otherwise limp along on
+# config.py's Path(__file__).parents[2] fallback, which only lands in the repo
+# because the package is installed editable -- a non-editable install would
+# silently break the one layer that guarantees the lights go off.
+Environment=MATTERLIGHTS_ENV_FILE=@INSTALL_DIR@/.env
+
+ExecStart=/bin/true
+ExecStop=@INSTALL_DIR@/.venv/bin/python -m matterlights.lights_off
+TimeoutStopSec=20
+
+SyslogIdentifier=matterlights-lights-off
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
