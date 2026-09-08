@@ -3,17 +3,18 @@
 # MatterLights
 
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2011%20%2B-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://www.microsoft.com/windows)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux%20%C2%B7%20Wayland-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://www.kernel.org/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![Home%20Assistant](https://img.shields.io/badge/Home%20Assistant-supported-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827?style=for-the-badge)](LICENSE)
 
-MatterLights is a Windows desktop agent that samples your screen, computes a vivid representative color, and pushes that color to Home Assistant lights in near real time. It includes a local management dashboard, a visual zone designer, background startup scripts, and enough guardrails to run unattended on a gaming or media PC.
+MatterLights is a desktop agent for **Windows and Linux** that samples your screen, computes a vivid representative color, and pushes that color to Home Assistant lights in near real time. It includes a local management dashboard, a visual zone designer, autostart integration for both platforms, and enough guardrails to run unattended on a gaming or media PC.
 
 ## Why this exists
 
 This project targets a very specific setup:
 
-- a Windows machine doing the screen capture locally
+- a Windows or Linux machine doing the screen capture locally
 - Home Assistant as the control plane
 - Matter or other light entities exposed in Home Assistant as normal `light.*` entities
 - an ambient-lighting goal somewhere between whole-screen wash and zone-aware ambilight
@@ -26,18 +27,20 @@ Instead of adding another lighting server or streaming stack, MatterLights captu
 - Autonomous (screen-driven) and custom (static color or looping pattern) playback modes, switchable live from the dashboard.
 - OLED-aware dark detection so black scenes can drop the lights to off.
 - Display-sleep aware: when the monitor powers off, the lights follow it off.
-- Turns the lights off when Windows shuts down, so the room does not stay lit.
+- Turns the lights off when the machine shuts down, so the room does not stay lit.
 - Saturation and dominant-color tuning aimed at vivid ambient lighting rather than washed-out averages.
 - Local dashboard at `http://127.0.0.1:8770` for status, logs, and service restarts.
 - Zone designer at `http://127.0.0.1:8765` with screenshot overlays and a flash-selected-bulb action.
 - Background helper scripts so sync, dashboard, and zone UI do not sit in visible terminal windows.
-- Windows scheduled-task autostart for the sync loop and dashboard.
+- One color engine on both platforms: capture hands over BGRx bytes and every color decision downstream is identical.
+- Autostart for the sync loop and dashboard: Windows scheduled tasks, or systemd user units on Linux.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-	Screen[Windows Screen Capture] --> Sampler[Color Sampler]
+	Win[Windows: DXGI Desktop Duplication] --> Sampler[Color Sampler]
+	Lin[Linux: Mutter/portal -> PipeWire] --> Sampler
 	Sampler --> Sync[Sync Loop]
 	Sync --> HA[Home Assistant REST API]
 	HA --> Lights[Configured light.* entities]
@@ -49,7 +52,24 @@ flowchart LR
 
 ## Quick start
 
-### Fastest path
+MatterLights runs the same way on both platforms; only setup differs.
+
+### Linux (GNOME Wayland)
+
+```bash
+scripts/linux/install.sh
+```
+
+That script creates the virtualenv, installs the package, checks Home Assistant,
+and offers to install the systemd units. Run it once, put your token in the
+`.env` it creates, then run it again.
+
+**It will refuse a conda interpreter, on purpose.** See
+[Linux setup](#linux-setup) below for why, and for the system packages you need.
+
+### Windows
+
+#### Fastest path
 
 If you want the shortest setup path from a fresh clone, run:
 
@@ -67,7 +87,7 @@ That guided script will:
 - optionally install Windows autostart
 - optionally start the sync loop immediately
 
-### Manual setup
+#### Manual setup
 
 ```powershell
 py -3.12 -m venv .venv
@@ -88,6 +108,116 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-zone-ui.ps1
 
 Those helper scripts background themselves by default, so they do not keep a visible terminal window open.
 
+
+## Linux setup
+
+### What it needs, and why some of it is not a pip dependency
+
+MatterLights captures the screen on Linux through **PipeWire**, driven by
+**GStreamer** and **PyGObject**. Those are distribution packages, not pip
+packages — `pip install PyGObject` needs meson plus cairo and glib headers and
+usually fails. They are therefore deliberately *not* declared in
+`pyproject.toml`, and the installer checks for them instead.
+
+```bash
+# Arch / Garuda
+sudo pacman -S --needed python-gobject gstreamer gst-plugins-base gst-plugin-pipewire
+
+# Debian / Ubuntu
+sudo apt install python3-gi gstreamer1.0-pipewire gstreamer1.0-plugins-base
+```
+
+### ⚠️ The virtualenv must come from the system Python
+
+Because those bindings are system packages, the virtualenv has to be created
+with `--system-site-packages` **and from the distribution interpreter** — a venv
+inherits the site-packages of whichever Python created it.
+
+```bash
+/usr/bin/python3 -m venv --system-site-packages .venv
+```
+
+**`python3` on your PATH may not be that interpreter.** If you have miniconda,
+pyenv or similar, `python3` is theirs, and a venv built from it has its own
+site-packages with no `gi` in them. The venv then comes up looking perfectly
+healthy and dies at the first capture. `scripts/linux/install.sh` refuses a
+conda interpreter outright for exactly this reason; override the choice with
+`MATTERLIGHTS_PYTHON=/path/to/python3` if you know better.
+
+### Why X11 screen capture cannot work here
+
+On a Wayland session, X11 capture returns a **completely black frame**. This is
+not a bug in `mss` or in any other X11 grabber, and no configuration fixes it:
+XWayland is a real X server and knows the monitor layout the compositor tells
+it, but native Wayland windows are never composited into the X11 root window, so
+there is nothing in the buffer to read. Geometry is metadata; pixels are
+content, and XWayland has only the first.
+
+That is why capture goes through the compositor instead.
+
+### The two capture backends
+
+| Backend | When it is used | Consent dialog |
+| --- | --- | --- |
+| `org.gnome.Mutter.ScreenCast` | GNOME sessions | none, ever |
+| `org.freedesktop.portal.ScreenCast` | everything else | once, then remembered via a restore token |
+
+The choice is made by asking whether `org.gnome.Mutter.ScreenCast` exists on the
+session bus — that is, *is this GNOME?* — and **never** by catching an error
+from it. A Mutter call that fails means GNOME answered badly (a race with
+`gnome-shell` starting, a dropped D-Bus call), and the right response is to
+retry. Falling back to the portal there would raise a consent dialog that an
+autostarted service meets at login with nobody present to click it, and the sync
+loop would sit there apparently running while driving nothing.
+
+On the portal path, **the user picks the screen in the dialog**, so
+`SCREEN_CAPTURE_TARGET` and the dashboard's Capture Screen panel cannot select
+it. The dashboard says so rather than offering a control that does nothing.
+
+### ⚠️ Capture uses `RecordArea` for every target, including single monitors
+
+`RecordMonitor` looks like the obvious call for "record this one screen". It is
+not used, because on the development machine's primary display — a 3840×2160
+panel at **240 Hz with variable refresh rate (VRR)** — it delivered **no frames
+at all**, while `RecordArea` over that monitor's identical rectangle delivered a
+frame in under a tenth of a second. The two 60 Hz outputs worked either way, so
+VRR is the only property that differs, though causation is unconfirmed. It is
+also intermittent: the same call succeeded earlier the same day.
+
+There is deliberately no "try `RecordMonitor` first" fast path. A capture
+backend that quietly stops working once a game starts is worse than useless,
+because a gaming monitor is the only screen anyone wants this program to sync to.
+
+### Linux autostart
+
+`scripts/linux/install.sh` offers to install three systemd units:
+
+| Unit | Scope | Purpose |
+| --- | --- | --- |
+| `matterlights-sync.service` | user | the sync loop |
+| `matterlights-dashboard.service` | user | the dashboard |
+| `matterlights-lights-off.service` | **system** | turns the lights off at shutdown |
+
+```bash
+systemctl --user status matterlights-sync
+journalctl --user -u matterlights-sync -f
+systemctl --user restart matterlights-sync
+scripts/linux/uninstall.sh          # removes the units, keeps .env and .venv
+```
+
+⚠️ **The user units are `PartOf=graphical-session.target`, and that matters.**
+If you have lingering enabled (`loginctl enable-linger`), a user unit bound to
+`default.target` would survive logout — with the compositor gone, capture dies
+and the lights stay stuck on their last color. `PartOf` makes logging out stop
+the unit, which sends `SIGTERM`, which turns the lights off.
+
+⚠️ **The lights-off unit is a system unit, not a user one**, for the same reason
+the Windows equivalent must run as SYSTEM: the thing being torn down cannot be
+the thing that reports the teardown. Its `ExecStart` does nothing; all the work
+is in `ExecStop`, ordered `After=network-online.target` — systemd stops units in
+reverse dependency order, so that is what makes it run while the network is
+still up.
+
 ## Local tools
 
 ### Screen sync
@@ -95,7 +225,11 @@ Those helper scripts background themselves by default, so they do not keep a vis
 The sync loop is the long-running service that captures the screen and updates your lights.
 
 ```powershell
-.\.venv\Scripts\python.exe -m matterlights
+.\.venv\Scripts\python.exe -m matterlights     # Windows
+```
+```bash
+.venv/bin/python -m matterlights                # Linux
+systemctl --user start matterlights-sync        # or, once installed
 ```
 
 ### Dashboard
@@ -112,7 +246,10 @@ The dashboard shows:
 Manual start:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-dashboard.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-dashboard.ps1   # Windows
+```
+```bash
+systemctl --user start matterlights-dashboard                            # Linux
 ```
 
 ### Zone designer
@@ -122,8 +259,15 @@ The zone designer overlays editable capture regions on a screenshot of the selec
 Manual start:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-zone-ui.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-zone-ui.ps1   # Windows
 ```
+```bash
+.venv/bin/python -m matterlights.zone_ui                                # Linux
+```
+
+On Linux the dashboard starts the zone designer as a transient systemd unit
+(`matterlights-zone-ui.service`) rather than a child process, so restarting the
+dashboard does not kill it.
 
 ## Ambience mode (recommended)
 
@@ -182,13 +326,54 @@ The choice is stored in `CONTROL_STATE_FILE`, so it applies immediately without 
 
 ### Screen sleep
 
-When the monitor goes to sleep, the lights turn off in both modes. This is the same idea as OLED dark detection, but it also covers custom mode and is driven by the actual Windows display power state (`GUID_CONSOLE_DISPLAY_STATE`) rather than screen content. Set `RESPECT_DISPLAY_SLEEP=false` to keep custom colors on while the screen sleeps.
+When the monitor goes to sleep, the lights turn off in both modes. This is the same idea as OLED dark detection, but it also covers custom mode and is driven by the actual display power state rather than screen content — `GUID_CONSOLE_DISPLAY_STATE` on Windows, and `org.gnome.Mutter.DisplayConfig`'s `PowerSaveMode` on Linux (falling back to polling `/sys/class/drm/*/dpms`, which needs no compositor at all).
+
+On Linux, a `PowerSaveMode` of `-1` means "Mutter does not know" and is deliberately treated as **on**. Reading an unknown state as off would turn the lights out in a room somebody is sitting in. Set `RESPECT_DISPLAY_SLEEP=false` to keep custom colors on while the screen sleeps.
 
 While the screen is asleep the sync loop keeps sweeping: any bulb that was unavailable when the screen went to sleep, or that only came back afterwards, is still turned off on a later tick. The lights come back when the display wakes.
 
 ### Shutdown, restart and logoff
 
-Three independent layers turn the lights off when the PC goes away. They overlap on purpose — the first one is the fastest but the least reliable, and the last one is the slowest but cannot be bypassed.
+Three independent layers turn the lights off when the PC goes away, on both
+platforms. They overlap on purpose — the first is the fastest but least
+reliable, the last is the slowest but cannot be bypassed.
+
+**The same lesson applies on both systems, in mirror image.** On Windows an
+ordinary interactive scheduled task fires on shutdown and then dies with
+`0xC000026B` — the session is already being destroyed, so no process can start
+in it — and only a task running as **SYSTEM**, in session 0, actually works. The
+Linux equivalent is exact: a **user** unit dies with the session, so it cannot be
+the thing that reports the session dying. That is why the Linux layer is a
+*system* unit. In both cases: the thing being torn down cannot be the thing that
+reports the teardown.
+
+#### On Linux
+
+| Layer | Mechanism | Covers | Latency |
+| --- | --- | --- | --- |
+| System unit **(the one that works)** | `matterlights-lights-off.service`, `ExecStop=python -m matterlights.lights_off`, ordered `After=network-online.target` | Shutdown and reboot | Under a second |
+| In-process hook | `SIGTERM` / `SIGINT` handler in the sync loop | `systemctl --user stop`, **logout** (the unit is `PartOf=graphical-session.target`), Ctrl-C | Immediate |
+| Home Assistant | Automation watching a heartbeat entity go stale | Everything, including a crash, a hard reset, or the power going out | ~3 minutes |
+
+The in-process layer is considerably more trustworthy on Linux than on Windows,
+because `systemctl stop` and a logout that stops a `PartOf=` unit both send a
+real `SIGTERM` and wait `TimeoutStopSec` for it. It still does not cover a
+shutdown, because systemd stops the whole user manager.
+
+The signal handler **chains to the previous handler** rather than swallowing the
+signal. Turning the lights off must not turn MatterLights into a program that
+ignores `SIGTERM`; systemd would then wait out `TimeoutStopSec` and `SIGKILL` it
+at every single logout and shutdown.
+
+Install and test it without rebooting:
+
+```bash
+sudo systemctl enable --now matterlights-lights-off.service
+sudo systemctl stop matterlights-lights-off.service    # runs ExecStop: lights go off
+sudo systemctl start matterlights-lights-off.service   # re-arm for the next shutdown
+```
+
+#### On Windows
 
 | Layer | Mechanism | Covers | Latency |
 | --- | --- | --- | --- |
@@ -245,6 +430,7 @@ action:
 
 ## Windows autostart
 
+
 Install startup tasks for both the sync loop and dashboard:
 
 ```powershell
@@ -284,7 +470,7 @@ The app reads `.env` first and falls back to shell environment variables. The mo
 | `COLOR_SYNC_MODE` | `ambience` (recommended), `zoned`, or `shared-variant`. |
 | `AMBIENCE_NEAR_LIGHTS` | Entity IDs of the bulbs beside the screen (ambience mode's near group). |
 | `PRIMARY_LIGHT_ZONE_NAMES` | Primary bulbs used in shared-variant mode. |
-| `SCREEN_CAPTURE_TARGET` | Default screen: `primary`, `all`, or a 1-based monitor index. Overridable live from the dashboard. |
+| `SCREEN_CAPTURE_TARGET` | Default screen: `primary`, `all`, or a 1-based monitor index. Overridable live from the dashboard. **Indices are per-OS and unrelated**: Windows numbers them in `mss` enumeration order, Linux sorts Mutter's logical monitors by position. Ignored on the portal capture path, where the user picks the screen in the consent dialog. |
 | `SYNC_INTERVAL_SECONDS` | Capture cadence. Lower is faster and heavier. |
 | `MAX_PARALLEL_LIGHT_UPDATES` | Upper bound for concurrent Home Assistant light updates. |
 | `BRIGHTNESS_FLOOR` | Minimum brightness on active updates. |
@@ -292,7 +478,7 @@ The app reads `.env` first and falls back to shell environment variables. The mo
 | `DARK_THRESHOLD` | Threshold below which lights can turn off. |
 | `ZONE_UI_PORT` | Local port for the zone designer. |
 | `DASHBOARD_PORT` | Local port for the management dashboard. |
-| `LOG_PATH` | Optional log file path. Defaults to `%LOCALAPPDATA%\matterlights\matterlights.log`. |
+| `LOG_PATH` | Optional log file path. Defaults per-OS: `%LOCALAPPDATA%\matterlights\matterlights.log` on Windows, `$XDG_STATE_HOME/matterlights/matterlights.log` (usually `~/.local/state/matterlights/`) on Linux. Leave it empty in a shared `.env` so it resolves correctly on each. |
 
 Recognized zone names:
 
@@ -332,6 +518,18 @@ MatterLights looks best when it is used as ambient room lighting, not as a frame
 - Kill any stray `python -m matterlights.zone_ui` processes.
 - Restart the zone UI through the dashboard or `scripts\start-zone-ui.ps1`.
 
+### Linux: "No frame arrived from the capture stream"
+
+- Confirm the screen is actually awake: `busctl --user get-property org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig PowerSaveMode` should print `i 0`.
+- Confirm the capture backend picked a source: `journalctl --user -u matterlights-sync | grep "Capture source"`.
+- If it says PyGObject or GStreamer is missing, the venv was built from the wrong interpreter — see [the virtualenv warning](#️-the-virtualenv-must-come-from-the-system-python).
+
+### Linux: the lights stay on after logging out
+
+The sync loop's unit is probably not tied to the graphical session. Check that
+`systemctl --user cat matterlights-sync` shows `PartOf=graphical-session.target`.
+With lingering enabled and that line missing, the unit survives logout.
+
 ### Black scenes do not dim enough
 
 - Lower `DARK_THRESHOLD` or increase `DARK_ACTIVE_RATIO_THRESHOLD`.
@@ -355,12 +553,35 @@ Useful manual checks:
 powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
 ```
 
+On Linux:
+
+```bash
+/usr/bin/python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Platform-specific tests skip on the other OS rather than failing, so the suite
+is green on both. One test earns special mention:
+`tests/test_import_surface.py` imports **every** module in the package on the
+current platform. It exists because a single platform-specific import at module
+scope is invisible on the platform it was written on — `screen.py` once began
+with `from ctypes import windll`, which made the entire package unimportable on
+Linux with nothing in the build to say so.
+
 ## Repository layout
 
 ```text
 src/matterlights/        Python package
+  capture/               screen capture: windows (DXGI/GDI), linux (PipeWire), mutter, portal
+  display_power/         screen-sleep detection, per platform
+  shutdown_hook/         session-end detection, per platform
+  service_control/       start/stop/status: Task Scheduler or systemd
+  screen.py              the color and zone engine — platform-free
 scripts/                 Windows setup and runtime helpers
-tests/                   Lightweight smoke and config tests
+scripts/linux/           Linux installer and uninstaller
+systemd/                 unit files (@INSTALL_DIR@ is substituted at install time)
+tests/                   Smoke, config and platform tests
 assets/                  README visuals
 ```
 

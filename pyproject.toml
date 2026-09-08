@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matterlights"
-version = "0.1.0"
-description = "Windows screen-to-light sync for Home Assistant and Matter lights"
+version = "0.2.0"
+description = "Screen-to-light sync for Home Assistant and Matter lights, on Windows and Linux"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
@@ -14,28 +14,40 @@ keywords = [
     "flask",
     "home-assistant",
     "matter",
+    "pipewire",
     "screen-sync",
+    "wayland",
     "windows",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications :: Gnome",
     "Framework :: Flask",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Home Automation",
     "Topic :: Multimedia :: Graphics",
 ]
 dependencies = [
-    # dxcam gives DXGI Desktop Duplication capture. mss is kept as the fallback
-    # for targets Desktop Duplication cannot serve (the whole virtual desktop,
-    # or two screens sharing a resolution) and for PNG previews.
-    # Sustained GDI readback via mss mis-draws the mouse cursor on this rig --
-    # see the capture-backend notes at the top of screen.py.
+    # dxcam gives DXGI Desktop Duplication capture on Windows. It installs on
+    # Linux (the wheel is pure Python) but cannot import there, so the marker
+    # keeps it out of Linux venvs entirely.
+    # mss stays cross-platform, but for two different jobs: on Windows it is the
+    # GDI fallback for targets Desktop Duplication cannot serve, and everywhere
+    # it is the PNG encoder (mss.tools.to_png is pure-Python zlib framing with
+    # no X11 dependency of its own).
+    #
+    # LINUX CAPTURE HAS NO PIP DEPENDENCY. It needs PyGObject and GStreamer with
+    # the PipeWire plugin, which are SYSTEM packages -- declaring them here would
+    # force a fragile source build. scripts/linux/install.sh checks for them and
+    # names the packages if they are missing. See capture/linux.py.
     "dxcam>=0.3.0; sys_platform == 'win32'",
     "flask>=3.1.0",
     "mss>=10.1.0",

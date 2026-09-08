@@ -10,6 +10,7 @@ __pycache__/
 .matterlights-control.json
 .matterlights-preview.json
 .matterlights-zones.json
+.claude/
 .vscode/
 build/
 dist/
