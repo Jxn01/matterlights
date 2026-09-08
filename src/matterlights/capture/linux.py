@@ -43,6 +43,48 @@ _DEFAULT_SYNC_INTERVAL_SECONDS = 0.2
 _FIRST_FRAME_TIMEOUT_SECONDS = 10.0
 
 
+def select_source(logger: logging.Logger | None = None):
+    """Choose the node source by DESKTOP IDENTITY, never by catching an error.
+
+    This is R1, and it is the most important rule in the Linux backend.
+
+    The portal is picked only when ``org.gnome.Mutter.ScreenCast`` is not a name
+    on the session bus -- that is, when this is not GNOME. A Mutter call that
+    *fails* means GNOME answered badly: a race with gnome-shell still starting,
+    a dropped D-Bus call, a compositor restart. The right response to that is to
+    retry on the loop's own error cadence.
+
+    Converting it into a portal request instead would raise a **consent dialog**,
+    and an autostarted unit meets that dialog at login with nobody watching. The
+    sync loop would then sit there, apparently running, driving nothing --
+    exactly the failure the Mutter path exists to avoid.
+
+    It is the same shape of mistake as a check that turns "could not read" into
+    "read something wrong": two different states collapsed into one, and the
+    remedy applied to the wrong one. Ask the specific question -- is this GNOME?
+    -- rather than inferring it from a symptom.
+    """
+
+    log = logger or LOGGER
+    from matterlights.capture.mutter import MutterSource, mutter_available
+
+    if mutter_available():
+        log.info("Capture source: GNOME Mutter ScreenCast")
+        return MutterSource(log)
+
+    from matterlights.capture.portal import PortalSource, PortalUnavailable, portal_available
+
+    if not portal_available():
+        raise PortalUnavailable(
+            "No screen capture backend: this is not a GNOME session and "
+            "xdg-desktop-portal's ScreenCast interface is unavailable. "
+            "Install a desktop portal for your compositor "
+            "(xdg-desktop-portal-gnome, -kde, -wlr) and try again."
+        )
+    log.info("Capture source: xdg-desktop-portal (not a GNOME session)")
+    return PortalSource(log)
+
+
 def caps_framerate(sync_interval_seconds: float) -> int:
     """Frames per second to allow: twice the sampling rate, at least 1.
 
@@ -94,9 +136,7 @@ class LinuxCaptureBackend:
         self._expected_connector: str = ""
 
     def _default_source(self):
-        from matterlights.capture.mutter import MutterSource
-
-        return MutterSource(self._logger)
+        return select_source(self._logger)
 
     # -- CaptureBackend ----------------------------------------------------
 

@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import os
 
+from matterlights import paths
+
 
 @dataclass(slots=True)
 class Settings:
@@ -150,10 +152,14 @@ def _resolve_dotenv_path() -> Path:
 
 
 def _default_log_path(base_dir: Path | None = None) -> Path:
-    local_app_data = os.getenv("LOCALAPPDATA")
-    if local_app_data:
-        return Path(local_app_data) / "matterlights" / "matterlights.log"
-    return (base_dir or Path.cwd()) / "matterlights.log"
+    """Per-OS state directory -- never the working directory.
+
+    ``base_dir`` is accepted for call compatibility and deliberately unused: the
+    old behaviour of falling back to the checkout dropped ``matterlights.log``
+    into the repo, where .gitignore hid it until it grew.
+    """
+
+    return paths.default_log_path()
 
 
 def _default_zone_file_path(base_dir: Path | None = None) -> Path:
