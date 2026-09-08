@@ -5,7 +5,6 @@ from html import escape
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 from typing import Any
 
@@ -22,14 +21,12 @@ from matterlights.playback import (
     save_control_state,
 )
 from matterlights.screen import capture_screen_thumbnail_png, list_monitors
+from matterlights.service_control import DASHBOARD, SYNC, ZONE_UI, get_service_control
 
 
 APP = Flask(__name__)
-SYNC_TASK_NAME = "MatterLights Screen Sync"
-DASHBOARD_TASK_NAME = "MatterLights Dashboard"
-ZONE_UI_MODULE = "matterlights.zone_ui"
-DASHBOARD_MODULE = "matterlights.dashboard"
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SERVICES = get_service_control()
 
 
 @APP.errorhandler(RuntimeError)
@@ -66,61 +63,45 @@ def get_logs() -> Response:
 
 @APP.post("/api/actions/sync/start")
 def start_sync() -> Response:
-    _run_powershell(
-        f"Start-ScheduledTask -TaskName '{_ps_quote(SYNC_TASK_NAME)}' -ErrorAction Stop"
-    )
-    return jsonify({"ok": True, "message": "Started screen sync task."})
+    SERVICES.start(SYNC)
+    return jsonify({"ok": True, "message": "Started screen sync."})
 
 
 @APP.post("/api/actions/sync/stop")
 def stop_sync() -> Response:
-    _run_powershell(
-        f"Stop-ScheduledTask -TaskName '{_ps_quote(SYNC_TASK_NAME)}' -ErrorAction SilentlyContinue"
-    )
-    return jsonify({"ok": True, "message": "Stopped screen sync task."})
+    SERVICES.stop(SYNC)
+    return jsonify({"ok": True, "message": "Stopped screen sync."})
 
 
 @APP.post("/api/actions/sync/restart")
 def restart_sync() -> Response:
-    _run_powershell(
-        " ; ".join(
-            [
-                f"Stop-ScheduledTask -TaskName '{_ps_quote(SYNC_TASK_NAME)}' -ErrorAction SilentlyContinue",
-                f"Start-ScheduledTask -TaskName '{_ps_quote(SYNC_TASK_NAME)}' -ErrorAction Stop",
-            ]
-        )
-    )
-    return jsonify({"ok": True, "message": "Restarted screen sync task."})
+    SERVICES.restart(SYNC)
+    return jsonify({"ok": True, "message": "Restarted screen sync."})
 
 
 @APP.post("/api/actions/zone-ui/start")
 def start_zone_ui() -> Response:
-    settings = load_settings()
-    if _module_processes(ZONE_UI_MODULE):
+    if SERVICES.is_running(ZONE_UI):
         return jsonify({"ok": True, "message": "Zone designer is already running."})
-
-    _launch_zone_ui_process(settings)
+    SERVICES.start(ZONE_UI)
     return jsonify({"ok": True, "message": "Started zone designer."})
 
 
 @APP.post("/api/actions/zone-ui/stop")
 def stop_zone_ui() -> Response:
-    stopped = _stop_module_processes(ZONE_UI_MODULE)
+    stopped = SERVICES.stop(ZONE_UI)
     return jsonify({"ok": True, "message": f"Stopped {stopped} zone designer process(es)."})
 
 
 @APP.post("/api/actions/zone-ui/restart")
 def restart_zone_ui() -> Response:
-    settings = load_settings()
-    stopped = _stop_module_processes(ZONE_UI_MODULE)
-    _launch_zone_ui_process(settings)
-    return jsonify({"ok": True, "message": f"Restarted zone designer after stopping {stopped} process(es)."})
+    SERVICES.restart(ZONE_UI)
+    return jsonify({"ok": True, "message": "Restarted zone designer."})
 
 
 @APP.post("/api/actions/dashboard/restart")
 def restart_dashboard() -> Response:
-    settings = load_settings()
-    _restart_dashboard_process(settings)
+    SERVICES.restart_self(DASHBOARD)
     return jsonify({"ok": True, "message": "Restarting dashboard… this page will reconnect automatically."})
 
 
@@ -212,12 +193,13 @@ def main() -> int:
 def _build_dashboard_status(settings: Settings) -> dict[str, Any]:
     control_state = load_control_state(settings.control_state_file)
     return {
-        "syncTask": _task_status(SYNC_TASK_NAME),
-        "dashboardTask": _task_status(DASHBOARD_TASK_NAME),
+        "syncTask": SERVICES.status(SYNC).as_dict(),
+        "dashboardTask": SERVICES.status(DASHBOARD).as_dict(),
         "zoneUi": {
             "url": f"http://127.0.0.1:{settings.zone_ui_port}",
             "port": settings.zone_ui_port,
-            "processes": _module_processes(ZONE_UI_MODULE),
+            # The UI only reads .length, so a running/not-running list is enough.
+            "processes": [{"running": True}] if SERVICES.is_running(ZONE_UI) else [],
         },
         "homeAssistant": _home_assistant_status(settings),
         "playback": {
@@ -238,129 +220,6 @@ def _build_dashboard_status(settings: Settings) -> dict[str, Any]:
             "screenCaptureTarget": effective_capture_target(control_state, settings.screen_capture_target),
         },
     }
-
-
-def _launch_zone_ui_process(settings: Settings) -> None:
-    env = os.environ.copy()
-    env["ZONE_UI_PORT"] = str(settings.zone_ui_port)
-    creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-        subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-  ) | getattr(
-    subprocess, "CREATE_NO_WINDOW", 0
-    )
-    subprocess.Popen(
-        [sys.executable, "-m", ZONE_UI_MODULE],
-        cwd=REPO_ROOT,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=creationflags,
-    )
-
-
-def _restart_dashboard_process(settings: Settings) -> None:
-    # The dashboard cannot restart itself in-process, so hand the work to a helper
-    # that outlives it. The helper waits for the HTTP response to flush, frees the
-    # port (whether the dashboard runs as the scheduled task or a manual process),
-    # then brings exactly one instance back.
-    task = _ps_quote(DASHBOARD_TASK_NAME)
-    module = _ps_quote(DASHBOARD_MODULE)
-    dashboard_script = _ps_quote(str(REPO_ROOT / "scripts" / "start-dashboard.ps1"))
-    script = f"""
-Start-Sleep -Seconds 1
-$task = Get-ScheduledTask -TaskName '{task}' -ErrorAction SilentlyContinue
-if ($null -ne $task) {{ Stop-ScheduledTask -TaskName '{task}' -ErrorAction SilentlyContinue }}
-Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like 'python*' -and $_.CommandLine -like '*-m {module}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
-Start-Sleep -Milliseconds 800
-if ($null -ne $task) {{
-  Start-ScheduledTask -TaskName '{task}' -ErrorAction SilentlyContinue
-}} else {{
-  & '{dashboard_script}' -Port {settings.dashboard_port} -NoBrowser
-}}
-"""
-    _spawn_independent_process(script)
-
-
-def _spawn_independent_process(script: str) -> None:
-    # Create the helper through WMI (Win32_Process.Create) so it runs under the WMI
-    # provider host instead of as a child of this process. That keeps it out of the
-    # dashboard's scheduled-task job object, so Stop-ScheduledTask — which terminates
-    # the whole task tree — cannot take the helper down before it restarts us.
-    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    helper_command = f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"
-    launcher = (
-        "Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
-        f"-Arguments @{{ CommandLine = '{_ps_quote(helper_command)}' }} | Out-Null"
-    )
-    subprocess.Popen(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", launcher],
-        cwd=REPO_ROOT,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-
-
-def _task_status(task_name: str) -> dict[str, Any]:
-    script = f"""
-$task = Get-ScheduledTask -TaskName '{_ps_quote(task_name)}' -ErrorAction SilentlyContinue
-if ($null -eq $task) {{
-  [ordered]@{{ exists = $false; taskName = '{_ps_quote(task_name)}' }} | ConvertTo-Json -Compress
-  exit 0
-}}
-$info = Get-ScheduledTaskInfo -TaskName '{_ps_quote(task_name)}'
-$lastRunTime = ''
-if ($info.LastRunTime -is [datetime] -and $info.LastRunTime -ne [datetime]::MinValue) {{
-  $lastRunTime = ([datetime]$info.LastRunTime).ToString('s')
-}}
-$nextRunTime = ''
-if ($info.NextRunTime -is [datetime] -and $info.NextRunTime -ne [datetime]::MinValue) {{
-  $nextRunTime = ([datetime]$info.NextRunTime).ToString('s')
-}}
-[ordered]@{{
-  exists = $true
-  taskName = $task.TaskName
-  state = [string]$task.State
-  lastRunTime = $lastRunTime
-  nextRunTime = $nextRunTime
-  lastTaskResult = $info.LastTaskResult
-}} | ConvertTo-Json -Compress
-"""
-    result = _run_powershell_json(script)
-    return result if isinstance(result, dict) else {"exists": False, "taskName": task_name}
-
-
-def _module_processes(module_name: str) -> list[dict[str, Any]]:
-    script = f"""
-$matches = Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like 'python*' -and $_.CommandLine -like '*-m { _ps_quote(module_name) }*' }} | Select-Object ProcessId, CommandLine
-if ($null -eq $matches) {{
-  '[]'
-  exit 0
-}}
-$matches | ConvertTo-Json -Compress
-"""
-    result = _run_powershell_json(script)
-    if result is None:
-        return []
-    if isinstance(result, dict):
-        return [result]
-    return result
-
-
-def _stop_module_processes(module_name: str) -> int:
-    script = f"""
-$matches = Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like 'python*' -and $_.CommandLine -like '*-m { _ps_quote(module_name) }*' }}
-$ids = @($matches | Select-Object -ExpandProperty ProcessId)
-foreach ($id in $ids) {{
-  Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
-}}
-[ordered]@{{ count = $ids.Count }} | ConvertTo-Json -Compress
-"""
-    result = _run_powershell_json(script)
-    if isinstance(result, dict):
-        return int(result.get("count", 0))
-    return 0
 
 
 def _home_assistant_status(settings: Settings) -> dict[str, Any]:
@@ -407,35 +266,6 @@ def _tail_log(log_path: Path | None, max_lines: int = 120) -> str:
     except OSError as exc:
         return f"Failed to read log file: {exc}"
     return "\n".join(lines[-max_lines:]) if lines else "Log file is empty."
-
-
-def _run_powershell_json(script: str) -> Any:
-    result = _run_powershell(script)
-    stdout = result.stdout.strip()
-    if not stdout:
-        return None
-    return json.loads(stdout)
-
-
-def _run_powershell(script: str) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-        # Without this the status poll flashes a console window several times a
-        # minute for as long as the dashboard page is open.
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    if result.returncode != 0:
-        message = result.stderr.strip() or result.stdout.strip() or "PowerShell command failed."
-        raise RuntimeError(message)
-    return result
-
-
-def _ps_quote(text: str) -> str:
-    return text.replace("'", "''")
 
 
 def _page_html() -> str:

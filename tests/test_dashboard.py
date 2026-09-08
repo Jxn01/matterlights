@@ -118,7 +118,11 @@ class ControlEndpointTests(unittest.TestCase):
 
 class DashboardHelpersTests(unittest.TestCase):
     def test_ps_quote_escapes_single_quotes_for_powershell(self) -> None:
-        self.assertEqual(dashboard._ps_quote("MatterLights' Dashboard"), "MatterLights'' Dashboard")
+        # _ps_quote moved to service_control/windows.py with the rest of the
+        # Task Scheduler code. It is pure string work, so it still imports here.
+        from matterlights.service_control.windows import _ps_quote
+
+        self.assertEqual(_ps_quote("MatterLights' Dashboard"), "MatterLights'' Dashboard")
 
     def test_api_errors_return_json_payload(self) -> None:
         with dashboard.APP.test_request_context("/api/status"):
