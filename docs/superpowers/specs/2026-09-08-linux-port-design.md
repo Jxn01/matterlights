@@ -251,8 +251,9 @@ Today the non-Windows fallback is the current working directory, which litters t
 
 ### 7.1 `pyproject.toml`
 
-- `dxcam>=0.3.0` gains `; sys_platform == "win32"`. It cannot build on Linux and currently makes
-  `pip install -e .` fail outright.
+- `dxcam>=0.3.0` gains `; sys_platform == "win32"`. It installs on Linux (the wheel is pure Python)
+  but cannot import there — it needs `comtypes`/COM — so it is dead weight in every Linux venv and
+  an import-time trap for anything that reaches for it unguarded.
 - Classifiers gain POSIX/Linux, keywords gain `linux`/`wayland`/`pipewire`, description stops
   saying "Windows".
 - Version `0.1.0` → **`0.2.0`**. A cross-platform rebrand is a release.

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from ctypes import windll
 from dataclasses import dataclass
 import json
 import logging
-import re
-import threading
 from pathlib import Path
 
-from mss import MSS, tools
+from matterlights import capture as _capture
 
 LOGGER = logging.getLogger(__name__)
 
@@ -71,158 +68,6 @@ _ZONE_PRESETS: dict[str, tuple[float, float, float, float]] = {
     "center": (0.25, 0.2, 0.75, 0.8),
 }
 
-# ---------------------------------------------------------------------------
-# Capture backend: DXGI Desktop Duplication (dxcam), falling back to mss/GDI.
-#
-# WHY THIS EXISTS. mss captures by BitBlt-ing from the screen DC. Sustained
-# full-screen GDI readback on this rig (RTX 5090, five displays, 4K HDR primary)
-# makes the compositor mis-draw the mouse cursor at the capture origin -- it
-# visibly snaps to the top-left of the captured monitor several times a second,
-# and the text caret in other applications flickers with it. Measured 2026-09-08:
-# with MatterLights stopped, a bare capture loop reproduced it on its own after
-# roughly two minutes of sustained grabbing, and it stopped the moment capture
-# stopped. GetCursorPos never moves during this, so nothing is moving the pointer
-# -- it is purely a compositing artifact of the GDI screen readback.
-#
-# Desktop Duplication avoids the problem class entirely: it receives frames from
-# DXGI instead of reading back the screen DC, and is substantially faster.
-#
-# Two dxcam behaviours callers must not trip over:
-#   * grab() returns None when no NEW frame has arrived since the last call. On a
-#     static screen that is normal, not an error, so the last good frame is kept.
-#   * A camera is bound to ONE output, so the "all monitors" target cannot use it.
-# Anything unsupported falls back to mss, so behaviour never regresses.
-# ---------------------------------------------------------------------------
-
-_DXCAM_LOCK = threading.Lock()
-_DXCAM_CAMERAS: dict[tuple[int, int], object] = {}
-_DXCAM_LAST_FRAME: dict[tuple[int, int], tuple[bytes, int, int]] = {}
-_DXCAM_OUTPUTS: list[dict[str, int | bool]] | None = None
-_DXCAM_UNAVAILABLE = False
-
-_OUTPUT_INFO_RE = re.compile(
-    r"Device\[(\d+)\]\s*Output\[(\d+)\]:\s*Res:\((\d+),\s*(\d+)\)\s*Rot:(\d+)\s*Primary:(True|False)"
-)
-
-
-def _dxcam_outputs() -> list[dict[str, int | bool]]:
-    """Parse dxcam's output table into something matchable against mss monitors.
-
-    dxcam reports resolution/rotation/primary but not desktop position, so the
-    match below is on size plus the primary flag.
-    """
-
-    global _DXCAM_OUTPUTS, _DXCAM_UNAVAILABLE
-    if _DXCAM_OUTPUTS is not None:
-        return _DXCAM_OUTPUTS
-    try:
-        import dxcam  # imported lazily so mss-only environments still work
-
-        outputs: list[dict[str, int | bool]] = []
-        for match in _OUTPUT_INFO_RE.finditer(dxcam.output_info()):
-            device_idx, output_idx, width, height, _rotation, primary = match.groups()
-            outputs.append(
-                {
-                    "device_idx": int(device_idx),
-                    "output_idx": int(output_idx),
-                    "width": int(width),
-                    "height": int(height),
-                    "primary": primary == "True",
-                }
-            )
-        _DXCAM_OUTPUTS = outputs
-        LOGGER.info("Desktop Duplication available: %d output(s)", len(outputs))
-    except Exception as error:  # noqa: BLE001 - any failure means "use mss"
-        _DXCAM_UNAVAILABLE = True
-        _DXCAM_OUTPUTS = []
-        LOGGER.warning("Desktop Duplication unavailable (%s); using GDI capture", error)
-    return _DXCAM_OUTPUTS
-
-
-def _dxcam_output_for_region(region: dict) -> tuple[int, int] | None:
-    """Find the single dxcam output that exactly covers ``region``.
-
-    Returns None when the region spans several screens (the ``all`` target) or
-    when two outputs share a resolution and cannot be told apart -- both cases
-    fall back to mss rather than risk capturing the wrong screen.
-    """
-
-    outputs = _dxcam_outputs()
-    if not outputs:
-        return None
-
-    width = int(region.get("width", 0))
-    height = int(region.get("height", 0))
-    candidates = [o for o in outputs if o["width"] == width and o["height"] == height]
-    if not candidates:
-        return None
-
-    if len(candidates) > 1:
-        primary_candidates = [o for o in candidates if o["primary"]]
-        if region.get("is_primary") and len(primary_candidates) == 1:
-            candidates = primary_candidates
-        else:
-            # Two identical screens (the pair of portrait 4K panels here) cannot be
-            # distinguished from resolution alone, and dxcam exposes no position.
-            return None
-
-    chosen = candidates[0]
-    return int(chosen["device_idx"]), int(chosen["output_idx"])
-
-
-def _dxcam_capture(region: dict) -> tuple[bytes, int, int] | None:
-    """Grab ``region`` via Desktop Duplication, or None if that is not possible."""
-
-    if _DXCAM_UNAVAILABLE:
-        return None
-    key = _dxcam_output_for_region(region)
-    if key is None:
-        return None
-
-    try:
-        import dxcam
-
-        with _DXCAM_LOCK:
-            camera = _DXCAM_CAMERAS.get(key)
-            if camera is None:
-                device_idx, output_idx = key
-                # BGRA matches the byte order the zone sampler expects, so the
-                # frame can be handed on without a colour conversion.
-                camera = dxcam.create(
-                    device_idx=device_idx, output_idx=output_idx, output_color="BGRA"
-                )
-                if camera is None:
-                    return None
-                _DXCAM_CAMERAS[key] = camera
-
-            frame = camera.grab()
-            if frame is None:
-                # No new frame since the last call: the screen has not changed.
-                # Reuse the previous one rather than reporting a black screen,
-                # which would make the lights blink off on a static desktop.
-                return _DXCAM_LAST_FRAME.get(key)
-
-            height, width = frame.shape[0], frame.shape[1]
-            raw = frame.tobytes()
-            _DXCAM_LAST_FRAME[key] = (raw, width, height)
-            return raw, width, height
-    except Exception as error:  # noqa: BLE001
-        LOGGER.warning("Desktop Duplication capture failed (%s); using GDI capture", error)
-        with _DXCAM_LOCK:
-            _DXCAM_CAMERAS.pop(key, None)
-        return None
-
-
-def _grab_raw(sct: MSS, capture_target: str) -> tuple[bytes, int, int]:
-    """Return one frame as raw BGRA bytes, preferring Desktop Duplication."""
-
-    region = _capture_region(sct, capture_target)
-    captured = _dxcam_capture(region)
-    if captured is not None:
-        return captured
-    screenshot = sct.grab(region)
-    return screenshot.raw, screenshot.width, screenshot.height
-
 
 _DOMINANT_COLOR_BUCKET_SIZE = 24
 _VIVID_PIXEL_MIN_BRIGHTNESS = 28
@@ -246,34 +91,47 @@ def capture_average_color(
     )[0]
 
 
-def list_monitors() -> list[dict[str, int]]:
+def list_monitors() -> list[dict[str, int | bool | str]]:
     """Describe every attached screen so the UI can offer a real choice.
 
-    Index 0 is mss's virtual bounding box covering all screens (the ``all``
+    Index 0 is the virtual bounding box covering all screens (the ``all``
     capture target); indexes 1..N are the physical monitors.
+
+    Plain dicts rather than ``Monitor`` objects because the dashboard and the
+    zone designer serialise this straight to JSON.
     """
 
-    with MSS() as sct:
-        monitors = [dict(monitor) for monitor in sct.monitors]
-    return [
-        {
-            "index": index,
-            "left": int(monitor.get("left", 0)),
-            "top": int(monitor.get("top", 0)),
-            "width": int(monitor.get("width", 0)),
-            "height": int(monitor.get("height", 0)),
-        }
-        for index, monitor in enumerate(monitors)
-    ]
+    return [monitor.as_dict() for monitor in _capture.get_backend().list_monitors()]
+
+
+class _CaptureSession:
+    """Context manager owning the capture backend for a long-running loop.
+
+    The sync loop used to construct ``mss.MSS()`` itself and pass the handle
+    down, which put a Windows-only type in ``main.py``'s import list and made
+    the loop responsible for a resource it knew nothing about. The backend owns
+    its session now -- an MSS handle on Windows, a PipeWire stream on Linux --
+    and this is simply the handle callers hold onto.
+    """
+
+    def __enter__(self) -> "_capture.CaptureBackend":
+        return _capture.get_backend()
+
+    def __exit__(self, *exc_info: object) -> None:
+        _capture.reset_backend()
+
+
+def capture_session() -> _CaptureSession:
+    return _CaptureSession()
 
 
 def capture_screen_png(capture_target: str = "primary") -> tuple[bytes, int, int]:
-    with MSS() as sct:
-        screenshot = _grab_screenshot(sct, capture_target)
-    return tools.to_png(screenshot.rgb, screenshot.size), screenshot.width, screenshot.height
+    return _capture.get_backend().grab_png(capture_target)
 
 
-def capture_screen_thumbnail_png(capture_target: str = "primary", max_width: int = 960) -> tuple[bytes, int, int]:
+def capture_screen_thumbnail_png(
+    capture_target: str = "primary", max_width: int = 960
+) -> tuple[bytes, int, int]:
     """Capture a screen and shrink it by pixel striding before encoding.
 
     A 4K frame encodes to ~8 MB of PNG and the whole virtual desktop to ~40 MB,
@@ -281,27 +139,7 @@ def capture_screen_thumbnail_png(capture_target: str = "primary", max_width: int
     striding keeps this dependency-free (no Pillow) and is plenty for a thumbnail.
     """
 
-    with MSS() as sct:
-        screenshot = _grab_screenshot(sct, capture_target)
-
-    width = screenshot.width
-    height = screenshot.height
-    step = max(1, -(-width // max(1, max_width)))
-    if step == 1:
-        return tools.to_png(screenshot.rgb, screenshot.size), width, height
-
-    source = screenshot.rgb
-    row_stride = width * 3
-    columns = range(0, width, step)
-    rows = bytearray()
-    for y_pos in range(0, height, step):
-        row_start = y_pos * row_stride
-        row = source[row_start:row_start + row_stride]
-        rows += b"".join(row[x_pos * 3:x_pos * 3 + 3] for x_pos in columns)
-
-    thumb_width = len(columns)
-    thumb_height = len(range(0, height, step))
-    return tools.to_png(bytes(rows), (thumb_width, thumb_height)), thumb_width, thumb_height
+    return _capture.get_backend().grab_png(capture_target, max_width)
 
 
 def capture_zone_colors(
@@ -320,8 +158,7 @@ def capture_zone_samples(
     zones: list[ScreenZone] | None = None,
 ) -> list[ZoneSample]:
     resolved_zones = zones or [ScreenZone("full", *_ZONE_PRESETS["full"])]
-    with MSS() as sct:
-        raw, width, height = _grab_raw(sct, capture_target)
+    raw, width, height = _capture.get_backend().grab(capture_target)
     return sample_zone_samples_from_screenshot(
         raw,
         width,
@@ -332,26 +169,28 @@ def capture_zone_samples(
     )
 
 
-def capture_raw_with_session(sct: MSS, capture_target: str = "primary") -> tuple[bytes, int, int]:
-    """Grab one frame and return its raw BGRA buffer plus dimensions.
+def capture_raw_with_session(
+    session: "_capture.CaptureBackend", capture_target: str = "primary"
+) -> tuple[bytes, int, int]:
+    """Grab one frame and return its raw BGRx buffer plus dimensions.
 
-    This is the hot path: the sync loop calls it several times a second forever,
-    so it goes through Desktop Duplication when possible. See the backend notes
-    above for why sustained GDI capture is avoided.
+    This is the hot path: the sync loop calls it several times a second forever.
+    Both backends are damage-driven and return the PREVIOUS frame when the screen
+    has not changed, rather than reporting black -- see ``CaptureBackend.grab``.
     """
 
-    return _grab_raw(sct, capture_target)
+    return session.grab(capture_target)
 
 
 def capture_zone_samples_with_session(
-    sct: MSS,
+    session: "_capture.CaptureBackend",
     sample_stride: int,
     color_boost: float = 1.15,
     capture_target: str = "primary",
     zones: list[ScreenZone] | None = None,
 ) -> list[ZoneSample]:
     resolved_zones = zones or [ScreenZone("full", *_ZONE_PRESETS["full"])]
-    raw, width, height = _grab_raw(sct, capture_target)
+    raw, width, height = session.grab(capture_target)
     return sample_zone_samples_from_screenshot(
         raw,
         width,
@@ -452,52 +291,6 @@ def default_light_zone_layout(light_count: int) -> list[str]:
 def brightness_for_color(color: RgbColor, floor: int) -> int:
     return max(floor, color.red, color.green, color.blue)
 
-
-def _primary_monitor_region(sct: MSS | None = None) -> dict[str, int]:
-    """Describe the primary screen, in PHYSICAL pixels.
-
-    ``GetSystemMetrics(SM_CXSCREEN)`` returns DPI-VIRTUALISED pixels in a
-    DPI-unaware process: on this machine's 3840x2160 panel at 125% scaling it
-    reports 3072x1728. That still captures the whole screen (scaled), so zone
-    sampling was unaffected -- but it never equals a real monitor rectangle,
-    which stopped Desktop Duplication from recognising the region and silently
-    forced the slow GDI path. mss reports physical pixels, so prefer its monitor
-    table and keep GetSystemMetrics purely as a fallback.
-    """
-
-    if sct is not None:
-        for monitor in sct.monitors[1:]:
-            if monitor.get("is_primary"):
-                return dict(monitor)
-        if len(sct.monitors) > 1:
-            return dict(sct.monitors[1])
-    return {
-        "left": 0,
-        "top": 0,
-        "width": int(windll.user32.GetSystemMetrics(0)),
-        "height": int(windll.user32.GetSystemMetrics(1)),
-    }
-
-
-def _capture_region(sct: MSS, capture_target: str) -> dict[str, int]:
-    normalized_target = capture_target.strip().lower()
-    if normalized_target == "primary":
-        return _primary_monitor_region(sct)
-    if normalized_target == "all":
-        return dict(sct.monitors[0])
-
-    monitor_index = int(normalized_target)
-    if monitor_index >= len(sct.monitors):
-        raise ValueError(
-            f"Monitor index {monitor_index} is not available "
-            f"({len(sct.monitors) - 1} screen(s) attached)"
-        )
-    return dict(sct.monitors[monitor_index])
-
-
-def _grab_screenshot(sct: MSS, capture_target: str):
-    monitor = _capture_region(sct, capture_target)
-    return sct.grab(monitor)
 
 
 def _sample_zone_samples(

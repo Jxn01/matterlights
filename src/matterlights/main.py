@@ -5,8 +5,6 @@ from dataclasses import dataclass
 import logging
 import time
 
-from mss import MSS
-
 from matterlights.ambience import build_ambience_zone_samples, resolve_near_entity_ids
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
@@ -21,6 +19,7 @@ from matterlights.screen import (
     ScreenZone,
     ZoneSample,
     capture_raw_with_session,
+    capture_session,
     load_configured_light_zones,
     sample_zone_samples_from_screenshot,
 )
@@ -183,7 +182,7 @@ def main() -> int:
         )
 
     try:
-        with MSS() as screen_capture_session:
+        with capture_session() as screen_capture_session:
             while True:
                 iteration_started = time.monotonic()
                 try:
