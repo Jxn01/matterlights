@@ -14,13 +14,19 @@ import unittest
 if sys.platform == "win32":  # pragma: no cover - Linux backend, Linux tests
     raise unittest.SkipTest("Linux capture backend")
 
-from matterlights.capture import Monitor
+from matterlights.capture import CaptureUnavailable, Monitor
 from matterlights.capture.linux import (
     LinuxCaptureBackend,
     build_pipeline_description,
     caps_framerate,
 )
-from matterlights.capture.mutter import parse_monitors, resolve_from_monitors
+from matterlights.capture.mutter import (
+    MutterSource,
+    MutterUnavailable,
+    is_transient_dbus_error,
+    parse_monitors,
+    resolve_from_monitors,
+)
 
 from fixtures.mutter_display_state import DISPLAY_STATE
 
@@ -223,3 +229,102 @@ class BackendBehaviourTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TransientDBusErrorTest(unittest.TestCase):
+    """Mutter refusing *for now* must not look like Mutter being broken.
+
+    Found live on 2026-09-08: as the monitor powered down, Mutter closed the
+    screencast session, and 687 ms later -- before this program's own
+    display-power watcher had noticed -- the loop tried to rebuild it.
+    ``CreateSession`` answered "Session creation inhibited", which escaped as an
+    unhandled ``GLib.Error`` and produced an ERROR-level traceback plus a
+    five-second retry backoff, 7 ms before the display-off path would have run.
+    """
+
+    def test_the_message_mutter_actually_sent(self) -> None:
+        self.assertTrue(
+            is_transient_dbus_error(
+                _FakeGError(
+                    "GDBus.Error:org.freedesktop.DBus.Error.Failed: "
+                    "Session creation inhibited (0)"
+                )
+            )
+        )
+
+    def test_real_faults_are_not_swallowed(self) -> None:
+        # A silent retry loop on any of these would hide a genuinely dead
+        # compositor behind "waiting for the display" forever.
+        for message in (
+            "GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: no such name",
+            "GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: denied",
+            "Record area not supported",
+            "Timeout was reached",
+        ):
+            with self.subTest(message=message):
+                self.assertFalse(is_transient_dbus_error(_FakeGError(message)))
+
+    def test_call_translates_only_the_transient_one(self) -> None:
+        """The translation lives in ``_call``, so it covers every method."""
+
+        source = MutterSource.__new__(MutterSource)
+        source._GLib = _FakeGLib
+        source._Gio = _FakeGio
+
+        source._bus = _RaisingBus(_FakeGError("Session creation inhibited (0)"))
+        with self.assertRaises(CaptureUnavailable):
+            source._call("/p", "i", "CreateSession")
+
+        source._bus = _RaisingBus(_FakeGError("AccessDenied: nope"))
+        with self.assertRaises(_FakeGError):
+            source._call("/p", "i", "CreateSession")
+
+    def test_capture_unavailable_is_not_a_mutter_unavailable(self) -> None:
+        """Load-bearing: the two mean opposite things to ``_ensure_stream``.
+
+        ``MutterUnavailable`` means "this target is no good, try the fallback
+        screen". If ``CaptureUnavailable`` inherited from it, the fallback would
+        catch it and try another monitor -- which cannot possibly help, because
+        an inhibited compositor refuses every target identically.
+        """
+
+        self.assertFalse(issubclass(CaptureUnavailable, MutterUnavailable))
+
+    def test_backend_propagates_it_instead_of_falling_back(self) -> None:
+        monitors = parse_monitors(DISPLAY_STATE)
+        source = FakeSource(monitors)
+
+        def refuse(_target: str) -> int:
+            raise CaptureUnavailable("Session creation inhibited")
+
+        source.open_stream = refuse
+        backend = _StubbedBackend(source)
+        backend.set_fallback_target("primary")
+
+        with self.assertRaises(CaptureUnavailable):
+            backend.grab("2")
+
+
+class _FakeGError(Exception):
+    """Shaped like ``GLib.Error``: carries ``.message``. No gi import needed."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class _FakeGLib:
+    Error = _FakeGError
+
+
+class _FakeGio:
+    class DBusCallFlags:
+        NONE = 0
+
+
+class _RaisingBus:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def call_sync(self, *_args, **_kwargs):
+        raise self._error

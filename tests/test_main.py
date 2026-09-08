@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import unittest
 
 from matterlights.main import enforce_lights_off
@@ -68,3 +69,47 @@ class EnforceLightsOffTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SyncLoopHandlerOrderTest(unittest.TestCase):
+    """``CaptureUnavailable`` must be caught BEFORE the catch-all ``Exception``.
+
+    Python matches except-clauses top to bottom, so moving the bare
+    ``except Exception`` above the specific one silently restores the original
+    defect: an ERROR traceback and a five-second backoff every time the monitor
+    goes to sleep. Nothing else in the test suite would notice -- the loop is
+    not unit-testable -- so the ordering is asserted structurally.
+    """
+
+    def _sync_try_blocks(self) -> list[ast.Try]:
+        import inspect
+
+        from matterlights import main as main_module
+
+        tree = ast.parse(inspect.getsource(main_module))
+        return [node for node in ast.walk(tree) if isinstance(node, ast.Try)]
+
+    def test_capture_unavailable_is_handled_before_the_catch_all(self) -> None:
+        def handler_name(handler: ast.ExceptHandler) -> str:
+            return ast.unparse(handler.type) if handler.type else "bare"
+
+        checked = 0
+        for block in self._sync_try_blocks():
+            names = [handler_name(h) for h in block.handlers]
+            specific = [i for i, n in enumerate(names) if "CaptureUnavailable" in n]
+            if not specific:
+                continue
+            checked += 1
+            catch_alls = [
+                i for i, n in enumerate(names) if n in ("Exception", "BaseException", "bare")
+            ]
+            for catch_all in catch_alls:
+                self.assertLess(
+                    specific[0],
+                    catch_all,
+                    f"CaptureUnavailable must precede {names[catch_all]!r}; got {names}",
+                )
+
+        self.assertEqual(
+            checked, 1, "expected exactly one CaptureUnavailable handler in the sync loop"
+        )

@@ -27,7 +27,7 @@ import logging
 import threading
 from typing import Callable
 
-from matterlights.capture import Monitor
+from matterlights.capture import CaptureUnavailable, Monitor
 
 LOGGER = logging.getLogger("matterlights.capture.mutter")
 
@@ -46,6 +46,33 @@ _CURSOR_MODE_HIDDEN = 0
 
 class MutterUnavailable(RuntimeError):
     """Raised when this is not a GNOME session, or Mutter refused the request."""
+
+
+# Substrings Mutter uses when it is refusing *for now* rather than failing.
+# Matched case-insensitively against the D-Bus error message.
+#
+# "Session creation inhibited" is what Mutter answers while the display is
+# asleep or the session is locked -- observed live on 2026-09-08 at 23:04:28,
+# 687 ms after Mutter closed the previous session because the monitor was
+# powering down and 7 ms before this program's own display-power watcher
+# noticed. Both sides were behaving correctly; only the reporting was wrong.
+_TRANSIENT_DBUS_ERROR_MARKERS = ("inhibited",)
+
+
+def is_transient_dbus_error(error) -> bool:
+    """Whether a ``GLib.Error`` means "not right now" rather than "broken".
+
+    Pure and takes anything with a ``message``, so the classification can be
+    tested without a session bus, a compositor, or a sleeping monitor.
+
+    Kept deliberately narrow. A broad match here would swallow real faults --
+    a missing interface, a permission denial, a Mutter that crashed -- and turn
+    a loud failure into a silent retry loop that never recovers.
+    """
+
+    message = getattr(error, "message", None) or str(error)
+    lowered = message.lower()
+    return any(marker in lowered for marker in _TRANSIENT_DBUS_ERROR_MARKERS)
 
 
 def _gi():
@@ -150,6 +177,7 @@ class MutterSource:
         self._subscriptions: list[int] = []
         self._on_invalidated: Callable[[str], None] | None = None
         self._closing = False
+        self._last_logged_target: tuple | None = None
         self.active_connector: str = ""
         ensure_main_loop()
         atexit.register(self.close)
@@ -249,9 +277,22 @@ class MutterSource:
         self.close()
 
         monitor = self.resolve_target(capture_target)
-        if monitor is None:
+        whole_desktop = monitor is None
+        if whole_desktop:
             monitor = self.list_monitors()[0]
-            self._logger.info(
+
+        # Log a REPEAT of the same target at debug. While the compositor is
+        # inhibited this method is retried on the sync interval, and an
+        # unconditional INFO here prints the same rectangle several times a
+        # second for the whole time the screen is asleep -- burying the one
+        # line that matters. A genuine change of target still logs at INFO.
+        target = (monitor.name, monitor.left, monitor.top, monitor.width, monitor.height)
+        level = logging.DEBUG if target == self._last_logged_target else logging.INFO
+        self._last_logged_target = target
+
+        if whole_desktop:
+            self._logger.log(
+                level,
                 "Recording the whole desktop: %dx%d at (%d, %d)",
                 monitor.width,
                 monitor.height,
@@ -259,7 +300,8 @@ class MutterSource:
                 monitor.top,
             )
         else:
-            self._logger.info(
+            self._logger.log(
+                level,
                 "Recording %s (index %d): %dx%d at (%d, %d)",
                 monitor.name,
                 monitor.index,
@@ -353,17 +395,32 @@ class MutterSource:
         )
 
     def _call(self, path: str, interface: str, method: str, params=None):
-        return self._bus.call_sync(
-            SCREENCAST_NAME,
-            path,
-            interface,
-            method,
-            params,
-            None,
-            self._Gio.DBusCallFlags.NONE,
-            10000,
-            None,
-        )
+        """Every ScreenCast D-Bus call goes through here, including the retries.
+
+        The translation below lives at this choke point on purpose: ``CreateSession``,
+        ``RecordArea`` and ``Stop`` can all be refused for the same transient reason,
+        so recognising it once here covers the class instead of the one method that
+        happened to be observed failing.
+        """
+
+        try:
+            return self._bus.call_sync(
+                SCREENCAST_NAME,
+                path,
+                interface,
+                method,
+                params,
+                None,
+                self._Gio.DBusCallFlags.NONE,
+                10000,
+                None,
+            )
+        except self._GLib.Error as error:
+            if is_transient_dbus_error(error):
+                raise CaptureUnavailable(
+                    f"{method} refused while capture is inhibited: {error.message}"
+                ) from error
+            raise
 
 
 def parse_monitors(state: tuple) -> list[Monitor]:

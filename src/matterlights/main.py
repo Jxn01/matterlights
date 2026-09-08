@@ -136,6 +136,7 @@ def main() -> int:
     next_heartbeat = 0.0
     display_off_active = False
     capture_fallback_active = False
+    capture_inhibited = False
     screen_dark_active = False
     master_off_active = False
     display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
@@ -415,6 +416,19 @@ def main() -> int:
                                 )
                 except KeyboardInterrupt:
                     raise
+                except _capture.CaptureUnavailable as error:
+                    # Not a failure: the compositor refuses screencast sessions
+                    # while the display is asleep or the session is locked. It is
+                    # a normal part of the monitor powering down, and it resolves
+                    # itself in well under a second once the display-power watcher
+                    # catches up -- so retry on the ORDINARY interval. Using the
+                    # error backoff here would turn a ~700 ms non-event into a
+                    # five-second stall, every single time the screen sleeps.
+                    if not capture_inhibited:
+                        capture_inhibited = True
+                        LOGGER.info("Capture inhibited (%s); waiting for the display", error)
+                    time.sleep(settings.sync_interval_seconds)
+                    continue
                 except Exception:
                     LOGGER.exception(
                         "Sync iteration failed. Retrying in %.1f seconds.",
@@ -422,6 +436,9 @@ def main() -> int:
                     )
                     time.sleep(settings.error_retry_seconds)
                     continue
+                if capture_inhibited:
+                    capture_inhibited = False
+                    LOGGER.info("Capture is available again")
                 sleep_seconds = settings.sync_interval_seconds - (time.monotonic() - iteration_started)
                 if sleep_seconds > 0:
                     time.sleep(sleep_seconds)
