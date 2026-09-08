@@ -4,18 +4,25 @@ Two sync loops driving the same Home Assistant lights fight each other — in cu
 pattern mode they run on independent clocks and send overlapping transition
 commands, which can lock Matter bulbs up until they are power-cycled. The
 scheduled task only guards against the *task* starting twice; a manual launch
-(``start-sync.ps1`` or ``python -m matterlights``) slips past it.
+(``start-sync.ps1`` or ``python -m matterlights``) slips past it, and on Linux
+``systemctl --user start`` and a manual run are two different things entirely.
 
-A session-local named mutex closes that gap: whichever loop starts first owns the
-mutex, and any later loop sees it already exists and bows out. Windows releases
-the mutex automatically when the owning process dies, so a crash never leaves a
-stale lock behind.
+A session-local named mutex on Windows, and an ``flock`` on Linux, close that
+gap: whichever loop starts first owns it, and any later loop finds it held and
+bows out.
+
+Both primitives are chosen for the same property -- the KERNEL releases them when
+the owning process dies, however it dies -- so a crash never leaves a stale lock
+that blocks every future start.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 import sys
+import tempfile
 
 
 LOGGER = logging.getLogger("matterlights.process_lock")
@@ -42,7 +49,7 @@ def acquire_sync_singleton(logger: logging.Logger | None = None, name: str = _MU
 
     log = logger or LOGGER
     if sys.platform != "win32":
-        return _NullLock()
+        return _acquire_flock(log, name)
 
     try:
         import ctypes
@@ -65,6 +72,70 @@ def acquire_sync_singleton(logger: logging.Logger | None = None, name: str = _MU
     except OSError:
         log.warning("Single-instance lock unavailable; continuing without it.", exc_info=True)
         return _NullLock()
+
+
+def _acquire_flock(log: logging.Logger, name: str) -> object | None:
+    """POSIX equivalent of the named mutex: an exclusive flock.
+
+    ``flock`` is the right primitive rather than a pidfile because the KERNEL
+    releases it when the holding process dies, however it dies. A pidfile
+    written by a process that then segfaults is a stale lock that blocks every
+    future start until someone notices and deletes it -- and this program is
+    meant to run unattended.
+
+    The file lives in ``$XDG_RUNTIME_DIR``, which is a tmpfs cleared at logout,
+    so the lock is scoped to one login session exactly as the Windows mutex is
+    scoped to one interactive session.
+    """
+
+    import fcntl
+
+    lock_path = _lock_path(name)
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(lock_path, "w", encoding="utf-8")
+    except OSError:
+        log.warning("Single-instance lock unavailable; continuing without it.", exc_info=True)
+        return _NullLock()
+
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+
+    try:
+        handle.write(f"{os.getpid()}\n")
+        handle.flush()
+    except OSError:
+        pass
+    return _PosixFlock(handle)
+
+
+def _lock_path(name: str) -> "Path":
+    runtime_dir = os.getenv("XDG_RUNTIME_DIR")
+    base = Path(runtime_dir) if runtime_dir else Path(tempfile.gettempdir())
+    return base / f"{name}.lock"
+
+
+class _PosixFlock:
+    def __init__(self, handle) -> None:
+        self._handle = handle
+
+    def release(self) -> None:
+        if self._handle is None:
+            return
+        try:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            self._handle.close()
+        except OSError:
+            pass
+        self._handle = None
 
 
 class _Win32Mutex:
