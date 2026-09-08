@@ -696,7 +696,7 @@ def _page_html() -> str:
     <section class="hero">
       <div>
         <h1>MatterLights Control</h1>
-        <p class="subtle">Monitor the screen sync task, Home Assistant reachability, the zone designer process, and recent logs. Use this page to restart the parts that matter without opening Task Scheduler or PowerShell.</p>
+        <p class="subtle">Monitor the screen sync service, Home Assistant reachability, the zone designer, and recent logs. Use this page to restart the parts that matter without reaching for Task Scheduler or systemctl.</p>
       </div>
       <div class="links">
         <button id="powerToggle" class="power" type="button" disabled>Lights: …</button>

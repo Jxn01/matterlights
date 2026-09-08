@@ -324,3 +324,78 @@ Nothing here is satisfied by a passing unit test. Each item is observed.
 - [ ] Monitor rearranged while running → stream rebuilds, lights keep tracking (**R4**).
 - [ ] Dashboard screenshotted at **1280×720** and looked at.
 - [ ] Windows regression check: the moved Windows modules still import and the win32 tests still pass on Windows.
+
+---
+
+## EXECUTION LOG — 2026-09-08
+
+All 11 tasks complete on branch `linux-port`. **160 tests passing, 7 win32 tests
+skipped** (baseline was 7 passing / 7 skipped / 5 erroring).
+
+| Task | Outcome |
+|---|---|
+| 1 Split `screen.py` | ✅ Package importable on Linux; 5 erroring test modules → 0. Guard test added. |
+| 2 `paths.py` | ✅ Log resolves to `~/.local/state/matterlights/` instead of the cwd. |
+| 3 Linux capture | ✅ Mutter → PipeWire → BGRx, verified live on all four targets. |
+| 4 Portal + R1 | ✅ Selection by bus-name presence; a Mutter error never becomes a portal prompt. |
+| 5 `display_power/` | ✅ Mutter `PowerSaveMode` + sysfs DPMS fallback. |
+| 6 `process_lock` | ✅ `flock`, verified cross-process. |
+| 7 `shutdown_hook/` + R2 | ✅ SIGTERM; **R2 was violated and is now fixed and pinned.** |
+| 8 `service_control/` | ✅ `dashboard.py` 1718 → 1548 lines. |
+| 9 units + installer | ✅ Installed and running. |
+| 10 docs | ✅ README 388 → 590 lines; pyproject 0.2.0. |
+| 11 verification | ✅ See below. |
+
+### Traps hit during execution — all fixed
+
+- 🚨 **`RecordMonitor` returns NO frames on the VRR primary.** Cost most of the
+  debugging time in Task 3, and every intermediate theory was wrong: the caps
+  filter, the `GstApp` import, screen damage, leaked sessions. The invariant only
+  appeared on a per-monitor sweep — DP-2 failed while DP-1, HDMI-1 and the whole
+  desktop all succeeded instantly. `RecordArea` over the identical rectangle
+  works. Now the single code path for every target.
+- **A control that also fails proves the hypothesis wrong.** Mid-debug, the caps
+  filter looked guilty until an interleaved control run showed the *plain*
+  pipeline failing too. Without that control, the fix would have landed on the
+  innocent component and the real bug would have survived.
+- 🚨 **`GstApp` must be imported for `appsink` to have Python methods.** Without
+  it there is no `try_pull_sample` and the `new-sample` path is unverifiable.
+- **`max-framerate` in caps throttles at source; `videorate` does not.**
+  Measured: 48.8 → 9.8 fps with caps, 46.5 fps with `videorate`.
+- 🚨 **R2 was violated.** `screen.py` imported `capture` at module scope, so
+  `lights_off` → `home_assistant` → `screen` pulled the capture package into the
+  shutdown helper. Found by running the check, not by reasoning about it.
+- **A signal test can kill its own runner.** Chaining to `SIG_DFL` and re-raising
+  is correct in production and terminates the test process; the real path moved
+  to a subprocess.
+- **`configparser` keeps only the last duplicate key; systemd accumulates them.**
+  The unit test read one `Environment=` line and called the other missing.
+- **Running as root, the state dir resolves to `/root`.** The shutdown helper left
+  a second log where nobody would look. `LOG_PATH=none` now disables file logging.
+- **`MemoryCurrent` and `CPUUsageNSec` are easy to transpose.** A bad `awk`
+  reported 10.4 GB RSS; the real figure is 174 MB and flat.
+
+### Verified live, on the machine
+
+- Capture on all four targets through the real backend (42–90 ms per grab).
+- Sync loop running as a user unit, driving all six bulbs from real screen
+  content, with distinct near/far ambience colours.
+- Display sleep → lights off; wake → `Display resumed; restoring lights`.
+- Capture target switching produces different colours per screen.
+- Shutdown `ExecStop` as root: six bulbs on → off in 138 ms, journal only.
+- Dashboard self-restart via transient timer; zone designer as a transient unit.
+- Dashboard reviewed at 1280×720, no console errors.
+- Colour engine proven **byte-identical** to pre-port (all 30 definitions).
+- Memory flat at 174 MB over 30 s.
+
+### NOT verified
+
+- **Windows.** Cannot be run from here. Evidence is static only: every module
+  compiles, the undefined-name scan is clean, and the Windows implementations
+  were reconstructed from git rather than hand-edited after a first attempt
+  stripped their constant blocks.
+- **A real reboot.** `ExecStop` was exercised via `systemctl stop`, which runs
+  the identical command as root; the shutdown ordering itself is unproven.
+- **A real logout.** `PartOf=graphical-session.target` is asserted by test and by
+  systemd semantics, not observed.
+- **HDR colour fidelity** — accepted as out of scope by the owner.
