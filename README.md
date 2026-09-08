@@ -182,15 +182,66 @@ The choice is stored in `CONTROL_STATE_FILE`, so it applies immediately without 
 
 ### Screen sleep
 
-### Shutdown
+When the monitor goes to sleep, the lights turn off in both modes. This is the same idea as OLED dark detection, but it also covers custom mode and is driven by the actual Windows display power state (`GUID_CONSOLE_DISPLAY_STATE`) rather than screen content. Set `RESPECT_DISPLAY_SLEEP=false` to keep custom colors on while the screen sleeps.
 
-When Windows shuts down, restarts, or logs off, the lights are turned off on the way out, so you are not left with a lit room after the PC is gone. Set `TURN_OFF_ON_SHUTDOWN=false` to leave them as they were.
+While the screen is asleep the sync loop keeps sweeping: any bulb that was unavailable when the screen went to sleep, or that only came back afterwards, is still turned off on a later tick. The lights come back when the display wakes.
 
-Windows only allows a few seconds for this, so it is deliberately a single grouped Home Assistant request. If Home Assistant is unreachable at that moment the shutdown still proceeds normally — it is never blocked.
+### Shutdown, restart and logoff
 
-### Screen sleep
+Three independent layers turn the lights off when the PC goes away. They overlap on purpose — the first one is the fastest but the least reliable, and the last one is the slowest but cannot be bypassed.
 
-When the monitor goes to sleep, the lights turn off in both modes. This is the same idea as OLED dark detection, but it also covers custom mode and is driven by the actual Windows display power state rather than screen content. Set `RESPECT_DISPLAY_SLEEP=false` to keep custom colors on while the screen sleeps.
+| Layer | Mechanism | Covers | Latency |
+| --- | --- | --- | --- |
+| Scheduled task **(the one that works)** | Task Scheduler trigger on System event **1074**, running `python -m matterlights.lights_off` **as SYSTEM** | Shutdown and restart | Under a second |
+| In-process hook | `WM_QUERYENDSESSION` to a hidden top-level window in the sync loop | Logoff, and any session end where the process is still alive to be told — **not** an ordinary `shutdown /r /t 0` | Immediate |
+| Home Assistant | Automation watching a heartbeat entity go stale | Everything, including a crash, a hard reset, or the power going out. Does **not** cover a normal reboot, which completes well inside the staleness window | ~3 minutes |
+
+Set `TURN_OFF_ON_SHUTDOWN=false` to disable the in-process hook. The shutdown is never blocked: the hook always tells Windows it may proceed, and a Home Assistant that is unreachable at that moment cannot delay it.
+
+**Why the scheduled task must run as SYSTEM.** This is the whole ballgame, and it is not optional. Registered as an ordinary interactive task, it triggers correctly — one second after event 1074 — and then dies with `0xC000026B`, `STATUS_DLL_INIT_FAILED_LOGOFF`: *"the application failed to initialize because the window station is shutting down."* By the time event 1074 is written, the interactive session is already being destroyed and Windows will not start a new process in it. SYSTEM runs in session 0, which is still alive, so the process actually starts. The helper needs nothing from the user session: the token and the absolute `LOG_PATH` both come from `.env`.
+
+**Why the in-process hook is not enough.** Measured across eight days and eight session ends, its callback fired *zero* times — while its window was demonstrably alive and answering `WM_QUERYENDSESSION` sent from another process in 5 ms. The same `0xC000026B` explains it: the interactive session is torn down abruptly rather than being given the usual "please close" conversation, which is what `shutdown /r /t 0` asks for. Moving the hook from `WM_ENDSESSION` to `WM_QUERYENDSESSION` did not change this — a real reboot afterwards still produced no log line. It is kept because it costs nothing and does work for a plain logoff, but **do not rely on it**; the SYSTEM task is the layer that actually turns the lights off.
+
+Install the scheduled task once, **from an elevated PowerShell** (registering a SYSTEM task requires it):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-shutdown-task.ps1
+```
+
+Test it without rebooting, and remove it again, with:
+
+```powershell
+Start-ScheduledTask -TaskName 'MatterLights Lights Off At Shutdown'
+powershell -ExecutionPolicy Bypass -File .\scripts\install-shutdown-task.ps1 -Remove
+```
+
+### The Home Assistant fallback
+
+The sync loop refreshes `HEARTBEAT_ENTITY_ID` (default `sensor.matterlights_heartbeat`) every `HEARTBEAT_INTERVAL_SECONDS`, writing an ISO timestamp. An automation in Home Assistant turns the lights off once that timestamp is more than three minutes old.
+
+This is the only layer that survives events Windows never gets to report — a crash, a reset button, a power cut. It uses a template *trigger*, so it fires once per transition: if you switch the lights on yourself after the PC is gone, it will not keep turning them back off.
+
+Two consequences worth knowing:
+
+- On a dual-boot machine, booting the other OS also stops the heartbeat, so the lights turn off once about three minutes in.
+- Set `HEARTBEAT_ENTITY_ID=` (empty) to disable publishing the heartbeat entirely.
+
+The automation is not created by this repo's installer — it lives in Home Assistant. The equivalent YAML is:
+
+```yaml
+alias: MatterLights - lights off when the PC stops reporting
+mode: single
+trigger:
+  - platform: template
+    value_template: >
+      {% set raw = states('sensor.matterlights_heartbeat') %}
+      {% if raw in ['unknown', 'unavailable', 'none', ''] %}false
+      {% else %}{{ (now() - (raw | as_datetime)).total_seconds() > 180 }}{% endif %}
+action:
+  - service: light.turn_off
+    target:
+      entity_id: <your HA_LIGHT_ENTITIES>
+```
 
 ## Windows autostart
 
@@ -226,6 +277,9 @@ The app reads `.env` first and falls back to shell environment variables. The mo
 | `CONTROL_STATE_FILE` | Where the playback mode (autonomous/custom) and pattern are stored. |
 | `RESPECT_DISPLAY_SLEEP` | `true` to turn lights off when the monitor sleeps. |
 | `TURN_OFF_ON_SHUTDOWN` | `true` to turn lights off when Windows shuts down, restarts, or logs off. |
+| `SESSION_END_TIMEOUT_SECONDS` | How long the session-end turn-off waits for Home Assistant. Longer than `REQUEST_TIMEOUT_SECONDS` because it gets one attempt and no retry. Default `10.0`. |
+| `HEARTBEAT_ENTITY_ID` | Entity the sync loop refreshes so Home Assistant can notice the PC is gone. Empty disables it. Default `sensor.matterlights_heartbeat`. |
+| `HEARTBEAT_INTERVAL_SECONDS` | How often the heartbeat is refreshed. Default `30.0`. |
 | `MAX_PATTERN_TRANSITION_SECONDS` | Caps custom pattern fades; `0` snaps (safe for Matter bulbs that freeze on transitions). |
 | `COLOR_SYNC_MODE` | `ambience` (recommended), `zoned`, or `shared-variant`. |
 | `AMBIENCE_NEAR_LIGHTS` | Entity IDs of the bulbs beside the screen (ambience mode's near group). |

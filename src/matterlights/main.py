@@ -3,7 +3,6 @@ from __future__ import annotations
 import colorsys
 from dataclasses import dataclass
 import logging
-from logging.handlers import RotatingFileHandler
 import time
 
 from mss import MSS
@@ -12,6 +11,7 @@ from matterlights.ambience import build_ambience_zone_samples, resolve_near_enti
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
+from matterlights.logging_setup import configure_logging
 from matterlights.playback import MODE_CUSTOM, CustomPlayer, effective_capture_target, load_control_state
 from matterlights.process_lock import acquire_sync_singleton
 from matterlights.shutdown_hook import start_shutdown_hook
@@ -58,6 +58,40 @@ class ZonedLightState:
     update: LightUpdate
 
 
+def enforce_lights_off(
+    client: HomeAssistantClient,
+    available_in_order: list[str],
+    confirmed_off: set[str],
+    transition_seconds: float,
+) -> None:
+    """Turn off every available light that is not already confirmed off.
+
+    Call this on every tick an off-state holds, not just when it begins. The
+    original code turned the lights off once on entry and then latched a flag,
+    which silently did nothing whenever the bulbs happened to be unavailable at
+    that instant: the log said "turning lights off", no request was sent, and
+    the latch guaranteed it was never retried. Both logged display-sleep events
+    hit exactly that case.
+
+    Tracking which lights are *confirmed* off instead makes the state
+    self-healing -- a bulb that was unavailable when the screen went to sleep,
+    or that only came back later, is still turned off on a later sweep.
+
+    Call this on entry to the off-state and then only when availability is
+    refreshed, not on every tick: the sync loop ticks five times a second, and
+    a bulb that is available but failing would otherwise be retried at that rate.
+    """
+
+    pending = [entity_id for entity_id in available_in_order if entity_id not in confirmed_off]
+    if not pending:
+        return
+
+    # The client already logs each failure; adding a second line here would just
+    # double the noise for a bulb that is refusing to answer.
+    failed = set(client.turn_off_lights(pending, transition_seconds))
+    confirmed_off.update(entity_id for entity_id in pending if entity_id not in failed)
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -65,7 +99,7 @@ def main() -> int:
     )
 
     settings = load_settings()
-    _configure_logging(settings.log_path)
+    configure_logging(settings.log_path)
 
     sync_lock = acquire_sync_singleton(LOGGER)
     if sync_lock is None:
@@ -94,6 +128,7 @@ def main() -> int:
     available_entity_ids = set(settings.light_entities)
     unavailable_entity_ids: set[str] = set()
     next_availability_refresh = 0.0
+    next_heartbeat = 0.0
     display_off_active = False
     capture_fallback_active = False
     screen_dark_active = False
@@ -102,8 +137,19 @@ def main() -> int:
 
     def turn_off_all_lights() -> None:
         # Windows allows only a few seconds here. Every light gets identical
-        # parameters, so this collapses into a single Home Assistant request.
-        client.turn_off_lights(list(settings.light_entities), 0.0)
+        # parameters, so this collapses into a single Home Assistant request --
+        # but with a timeout of its own: the sync loop's is tuned for a loop that
+        # retries every tick, and this call gets exactly one attempt before the
+        # process is killed.
+        client.turn_off_lights_urgently(
+            list(settings.light_entities), settings.session_end_timeout_seconds
+        )
+
+    # Lights confirmed off by an off-state (master switch or display sleep).
+    # Deliberately NOT part of reset_runtime_caches(), which clears
+    # off_entity_ids on every state change and would forget what we sent.
+    master_off_confirmed: set[str] = set()
+    display_off_confirmed: set[str] = set()
 
     shutdown_hook = (
         start_shutdown_hook(turn_off_all_lights, LOGGER) if settings.turn_off_on_shutdown else None
@@ -173,11 +219,25 @@ def main() -> int:
                         reset_runtime_caches()
 
                     current_time = time.monotonic()
+                    if (
+                        settings.heartbeat_entity_id
+                        and settings.heartbeat_interval_seconds > 0
+                        and current_time >= next_heartbeat
+                    ):
+                        # Deliberately before the availability refresh: if Home
+                        # Assistant is unreachable this fails quietly, and the
+                        # fallback automation treating that as "PC gone" is the
+                        # correct reading anyway.
+                        client.post_heartbeat(settings.heartbeat_entity_id)
+                        next_heartbeat = current_time + settings.heartbeat_interval_seconds
+
+                    availability_refreshed = False
                     if current_time >= next_availability_refresh:
                         available_entity_ids = client.get_available_entity_ids(settings.light_entities)
                         unavailable_entity_ids = set(settings.light_entities) - available_entity_ids
                         retry_entity_ids &= available_entity_ids
                         next_availability_refresh = current_time + settings.availability_refresh_seconds
+                        availability_refreshed = True
                         if unavailable_entity_ids:
                             LOGGER.warning(
                                 "Skipping unavailable lights: %s",
@@ -200,19 +260,29 @@ def main() -> int:
 
                     if not control_state.lights_on:
                         # Master switch: off overrides every mode until re-enabled.
-                        if not master_off_active:
-                            if ordered_available:
-                                client.turn_off_lights(ordered_available, settings.transition_seconds)
+                        just_entered = not master_off_active
+                        if just_entered:
                             master_off_active = True
+                            master_off_confirmed.clear()
                             reset_runtime_caches()
                             LOGGER.info("Lights switched off from the dashboard")
+                        # Sweep on entry, then only when availability changes --
+                        # which is the only moment ordered_available can differ.
+                        if just_entered or availability_refreshed:
+                            enforce_lights_off(
+                                client, ordered_available, master_off_confirmed, settings.transition_seconds
+                            )
                     elif not display_on:
-                        if not display_off_active:
-                            if ordered_available:
-                                client.turn_off_lights(ordered_available, settings.transition_seconds)
+                        just_entered = not display_off_active
+                        if just_entered:
                             display_off_active = True
+                            display_off_confirmed.clear()
                             reset_runtime_caches()
                             LOGGER.info("Display off; turning lights off")
+                        if just_entered or availability_refreshed:
+                            enforce_lights_off(
+                                client, ordered_available, display_off_confirmed, settings.transition_seconds
+                            )
                     elif control_state.mode == MODE_CUSTOM:
                         command = custom_player.tick(control_state.custom, ordered_available, current_time)
                         if command is not None and command.updates:
@@ -364,29 +434,6 @@ def main() -> int:
         sync_lock.release()
 
 
-def _configure_logging(log_path) -> None:
-    root_logger = logging.getLogger()
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-
-    root_logger.handlers.clear()
-    root_logger.setLevel(logging.INFO)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
-
-    if log_path is None:
-        return
-
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    file_handler = RotatingFileHandler(
-        log_path,
-        maxBytes=1_048_576,
-        backupCount=3,
-        encoding="utf-8",
-    )
-    file_handler.setFormatter(formatter)
-    root_logger.addHandler(file_handler)
 
 
 def _capture_zones_for_mode(color_sync_mode: str, light_zones: list[ScreenZone]) -> list[ScreenZone]:

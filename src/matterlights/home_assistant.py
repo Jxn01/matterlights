@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import logging
 import threading
 import time
@@ -81,6 +82,39 @@ class HomeAssistantClient:
                 available_entity_ids.add(entity_id)
         return available_entity_ids
 
+    def post_heartbeat(self, entity_id: str) -> bool:
+        """Record that the sync loop is still alive.
+
+        Backs the Home Assistant fallback: an automation turns the lights off
+        when this stops being refreshed. That is the only layer that survives
+        the cases Windows never tells us about -- a crash, a hard reset, or the
+        power going out -- because it needs nothing from this machine at all.
+
+        The state is an ISO timestamp rather than a constant, so the automation
+        can reason about staleness with plain template maths instead of relying
+        on ``last_updated`` semantics.
+        """
+
+        try:
+            with self._get_session().post(
+                f"{self.base_url}/api/states/{entity_id}",
+                json={
+                    "state": datetime.now(timezone.utc).isoformat(),
+                    "attributes": {
+                        "device_class": "timestamp",
+                        "friendly_name": "MatterLights heartbeat",
+                        "icon": "mdi:heart-pulse",
+                    },
+                },
+                timeout=self.timeout_seconds,
+            ) as response:
+                response.raise_for_status()
+            return True
+        except requests.RequestException as exc:
+            # Never fatal: the heartbeat is a safety net, not part of syncing.
+            LOGGER.debug("Failed to post heartbeat: %s", _concise_request_error(exc))
+            return False
+
     def set_lights(
         self,
         entity_ids: list[str],
@@ -97,6 +131,33 @@ class HomeAssistantClient:
         return self.apply_light_updates(
             [LightUpdate(entity_id=entity_id) for entity_id in entity_ids],
             transition_seconds,
+        )
+
+    def turn_off_lights_urgently(self, entity_ids: list[str], timeout_seconds: float) -> bool:
+        """Turn every light off in one request, waiting longer than the sync timeout.
+
+        The session-end paths (Windows shutting down, the event-triggered helper)
+        get seconds, not minutes, and cannot retry -- the process is about to be
+        killed. The normal :attr:`timeout_seconds` is tuned for a sync loop that
+        retries every tick, and is too short here: a grouped turn_off usually
+        answers in ~0.2s but has been measured taking over 3s when the Matter
+        bridge is busy, which silently left half the bulbs on.
+
+        Returns True if Home Assistant accepted the call. A timeout is a real
+        warning sign, not a formality: when this timed out at 3s during testing,
+        only two of six bulbs had actually gone off and one was still on twenty
+        minutes later. Disconnecting cancels the rest of the service call, so
+        "the request was sent" is not the same as "the lights are off".
+        """
+
+        if not entity_ids:
+            return True
+        return self._post_light_service(
+            tuple(entity_ids),
+            "turn_off",
+            0.0,
+            {},
+            timeout_seconds=timeout_seconds,
         )
 
     def apply_light_updates(
@@ -185,6 +246,7 @@ class HomeAssistantClient:
         payload: dict[str, object],
         *,
         log_errors: bool = True,
+        timeout_seconds: float | None = None,
     ) -> bool:
         try:
             with self._get_session().post(
@@ -194,7 +256,7 @@ class HomeAssistantClient:
                     "transition": transition_seconds,
                     **payload,
                 },
-                timeout=self.timeout_seconds,
+                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
             ) as response:
                 response.raise_for_status()
             return True

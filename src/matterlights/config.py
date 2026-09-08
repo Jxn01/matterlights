@@ -16,6 +16,11 @@ class Settings:
     control_state_file: Path | None = None
     respect_display_sleep: bool = True
     turn_off_on_shutdown: bool = True
+    # Home Assistant fallback: the sync loop refreshes this entity, and an HA
+    # automation turns the lights off when it goes stale. Covers the cases
+    # Windows never reports -- crash, hard reset, power cut. Empty disables it.
+    heartbeat_entity_id: str = "sensor.matterlights_heartbeat"
+    heartbeat_interval_seconds: float = 30.0
     color_sync_mode: str = "zoned"
     primary_light_zone_names: list[str] = field(default_factory=list)
     ambience_near_lights: list[str] = field(default_factory=list)
@@ -23,6 +28,11 @@ class Settings:
     dashboard_port: int = 8770
     screen_capture_target: str = "primary"
     request_timeout_seconds: float = 3.0
+    # Session end gets one attempt and no retry, so it waits longer than the
+    # sync loop does. Windows allows roughly 5s after WM_QUERYENDSESSION; the
+    # event-triggered helper has the ~15s between event 1074 and the session
+    # actually going down.
+    session_end_timeout_seconds: float = 10.0
     availability_refresh_seconds: float = 5.0
     sync_interval_seconds: float = 0.2
     inter_light_delay_seconds: float = 0.4
@@ -78,6 +88,8 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         ),
         respect_display_sleep=_parse_bool(get_value("RESPECT_DISPLAY_SLEEP", "true")),
         turn_off_on_shutdown=_parse_bool(get_value("TURN_OFF_ON_SHUTDOWN", "true")),
+        heartbeat_entity_id=get_value("HEARTBEAT_ENTITY_ID", "sensor.matterlights_heartbeat").strip(),
+        heartbeat_interval_seconds=float(get_value("HEARTBEAT_INTERVAL_SECONDS", "30.0")),
         color_sync_mode=get_value("COLOR_SYNC_MODE", "zoned").strip().lower(),
         primary_light_zone_names=_parse_light_zone_layout(
             get_value("PRIMARY_LIGHT_ZONE_NAMES", "top-center,bottom-left")
@@ -87,6 +99,7 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         dashboard_port=int(get_value("DASHBOARD_PORT", "8770")),
         screen_capture_target=get_value("SCREEN_CAPTURE_TARGET", "primary"),
         request_timeout_seconds=float(get_value("REQUEST_TIMEOUT_SECONDS", "3.0")),
+        session_end_timeout_seconds=float(get_value("SESSION_END_TIMEOUT_SECONDS", "10.0")),
         availability_refresh_seconds=float(get_value("AVAILABILITY_REFRESH_SECONDS", "5.0")),
         sync_interval_seconds=float(get_value("SYNC_INTERVAL_SECONDS", "0.2")),
         inter_light_delay_seconds=float(get_value("INTER_LIGHT_DELAY_SECONDS", "0.4")),

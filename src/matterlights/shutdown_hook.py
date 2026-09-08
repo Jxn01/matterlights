@@ -13,6 +13,37 @@ notification arrives by:
 
 Either path invokes the callback exactly once.
 
+⚠️ **This hook does not fire on an ordinary Windows shutdown or restart, and
+nothing here can make it.** Do not rely on it. The scheduled task registered by
+``scripts/install-shutdown-task.ps1`` -- running as SYSTEM, off System event
+1074 -- is the layer that actually turns the lights off.
+
+We act on ``WM_QUERYENDSESSION`` rather than waiting for ``WM_ENDSESSION``.
+That reverses the original design, which deliberately waited for the
+confirmation because a query can still be cancelled. Measurement forced the
+change: across six shutdowns and two restarts the callback never ran once, even
+though the window was alive and answering messages (verified by sending it a
+``WM_QUERYENDSESSION`` from another process, which returned 1 in 5ms). The
+delivery, not the handler, is what fails.
+
+Moving to the query did not rescue it -- a real reboot afterwards still logged
+nothing. What it did produce was the explanation. The event-1074 task, then
+still running in the user's session, failed at the same moment with
+``0xC000026B`` (``STATUS_DLL_INIT_FAILED_LOGOFF``): "the application failed to
+initialize because the window station is shutting down". The interactive session
+is already being destroyed when event 1074 is written, so it is not that our
+message is lost in transit -- the session never holds the usual "please close"
+conversation at all, which is what ``shutdown /r /t 0`` asks for.
+
+The hook is kept because it costs nothing, and it does work for a plain logoff
+and for anything that ends the session politely.
+
+The cost of acting early is a spurious turn-off if the shutdown is cancelled.
+That is cheap and self-correcting: the sync loop restores the lights on its next
+tick. To keep a cancelled shutdown from disarming us permanently, a
+``WM_ENDSESSION`` with ``wParam`` FALSE -- which is exactly how Windows reports
+"the session is not ending after all" -- re-arms the hook.
+
 Note this deliberately creates a normal hidden top-level window rather than the
 message-only window :mod:`matterlights.display_power` uses: message-only windows
 are not enumerated as top-level windows and therefore never receive session-end
@@ -51,9 +82,14 @@ _SESSION_END_CTRL_EVENTS = frozenset({_CTRL_CLOSE_EVENT, _CTRL_LOGOFF_EVENT, _CT
 class ShutdownHook(Protocol):
     def stop(self) -> None: ...
 
+    def rearm(self) -> None: ...
+
 
 class _NullHook:
     def stop(self) -> None:
+        return None
+
+    def rearm(self) -> None:
         return None
 
 
@@ -106,6 +142,7 @@ if sys.platform == "win32":
             self._logger = logger
             self._fired = threading.Lock()
             self._has_fired = False
+            self._callback_thread: threading.Thread | None = None
             self._ready = threading.Event()
             self._failed = False
             self._hwnd: int | None = None
@@ -187,17 +224,55 @@ if sys.platform == "win32":
                     pass
 
         def fire(self, reason: str) -> None:
-            """Run the callback at most once, whichever path detects the end."""
+            """Start the callback at most once, whichever path detects the end.
+
+            The callback runs on its own thread so the window procedure can
+            answer immediately. Windows *waits* for the ``WM_QUERYENDSESSION``
+            reply, and an app that does not answer within ``HungAppTimeout``
+            (~5s) gets the "this app is preventing you from restarting" screen.
+            Turning six Matter bulbs off has been measured taking over 3s when
+            the bridge is busy -- which is precisely the state the sync loop
+            leaves it in at shutdown -- so doing it inline would risk exactly
+            that. Returning at once and letting the request finish in the
+            background is strictly better: the process usually survives long
+            enough, and the event-1074 task is the layer that *guarantees* it.
+            """
 
             with self._fired:
                 if self._has_fired:
                     return
                 self._has_fired = True
+
+            self._logger.info("Session ending (%s); turning lights off", reason)
+            worker = threading.Thread(
+                target=self._run_callback,
+                name="session-end",
+                daemon=True,
+            )
+            self._callback_thread = worker
+            worker.start()
+
+        def _run_callback(self) -> None:
             try:
-                self._logger.info("Session ending (%s); turning lights off", reason)
                 self._on_session_end()
             except Exception:
                 self._logger.exception("Failed to turn lights off during shutdown")
+
+        def wait_for_callback(self, timeout: float | None = None) -> None:
+            """Join the callback thread. For tests, which assert on its effects."""
+
+            worker = self._callback_thread
+            if worker is not None:
+                worker.join(timeout)
+
+        def rearm(self) -> None:
+            """Allow the callback to run again after a cancelled shutdown."""
+
+            with self._fired:
+                if not self._has_fired:
+                    return
+                self._has_fired = False
+            self._logger.info("Shutdown cancelled; re-arming session-end detection")
 
         def _run(self) -> None:
             try:
@@ -272,12 +347,16 @@ if sys.platform == "win32":
 
         def _window_proc(self, hwnd, message, wparam, lparam):
             if message == _WM_QUERYENDSESSION:
-                # Never block shutdown; wait for WM_ENDSESSION to act, since a
-                # query can still be cancelled by another application.
+                # Act now: WM_ENDSESSION often never arrives (see module docstring).
+                # Always return 1 -- never block the shutdown.
+                self.fire("WM_QUERYENDSESSION")
                 return 1
             if message == _WM_ENDSESSION:
                 if wparam:
                     self.fire("WM_ENDSESSION")
+                else:
+                    # The shutdown was cancelled. Re-arm so the next one still fires.
+                    self.rearm()
                 return 0
             if message == _WM_DESTROY:
                 self._hwnd = None
