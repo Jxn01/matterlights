@@ -34,7 +34,10 @@ Every one of these was verified on the target machine on 2026-09-08, not assumed
 | `BGRx` matches the existing sampler | The negotiated format is the exact byte order `_sample_zone` already indexes (`blue=+0, green=+1, red=+2`). No conversion. |
 | `RecordArea(x,y,w,h)` exists | The "all screens combined" target is native; no per-monitor compositing needed. |
 | Rotated outputs deliver display orientation | `RecordMonitor('DP-1')` on a `transform=3` output returns **2160×3840**, tall as displayed. Zone names stay physically correct. |
-| `max-framerate` throttles at source | Adding `max-framerate=10/1` to the caps filter took the stream from 110.7 fps to 4.7 fps. |
+| 🚨 `RecordMonitor` yields NO frames on the VRR output | On DP-2 (Dell 32", 3840x2160@240, `refresh-rate-mode: variable`) `RecordMonitor` delivered nothing across repeated attempts, while `RecordArea` over the identical rectangle delivered a frame in <0.1 s. The two 60 Hz outputs worked either way. VRR is the only property that differs; **causation unconfirmed**. It is intermittent — the same call succeeded earlier the same day. |
+| `RecordArea` works for every target | HDMI-1, DP-2, DP-1 and the whole desktop all delivered a frame in ~0.0 s at native resolution. |
+| `max-framerate` throttles at source | Measured over 6 s on a live desktop: uncapped 293 frames (48.8 fps), `max-framerate=10/1` 59 frames (**9.8 fps**), `videorate max-rate=10` 279 frames (46.5 fps — drops downstream, does *not* throttle the source). |
+| `GstApp` must be imported | Without `gi.require_version("GstApp", "1.0")` the appsink has no `try_pull_sample` and the `new-sample` path cannot be verified. |
 | Portal supports restore tokens | `org.freedesktop.portal.ScreenCast` version **5** (≥4 required for `persist_mode`). |
 | Display sleep is observable two ways | `Mutter.DisplayConfig.PowerSaveMode` (`i 0`) and `/sys/class/drm/*/dpms`. |
 | PyGObject/GStreamer are system packages | Present on `/usr/bin/python3` (3.14.7). `python3` on PATH is **miniconda 3.13.7**, which cannot see them. |
@@ -176,8 +179,21 @@ sorted by `(x, y)` and numbered `1..N`, so `SCREEN_CAPTURE_TARGET=2` and the das
 stable across reboots. Index 0 is the virtual bounding box, matching the Windows convention.
 **Linux and Windows monitor indices are unrelated**; each OS keeps its own control-state file.
 
-**Capture targets.** `primary` → the connector Mutter marks primary. A numeric index → that
-connector via `RecordMonitor`. `all` → `RecordArea` over the virtual bounding box.
+**Capture targets — always `RecordArea`, never `RecordMonitor`.** `primary`, a numeric index and
+`all` all resolve to a rectangle in stage coordinates, which is then recorded with `RecordArea`.
+
+This is not the obvious design and it is not premature generality. `RecordMonitor` on this rig's
+primary — the 240 Hz VRR gaming panel, which is precisely the screen this program exists to sync
+to — delivered **no frames at all**, while `RecordArea` over that monitor's identical rectangle
+delivered one immediately. It is intermittent, which is exactly why there is no fast path with a
+fallback: a capture backend that works until the user starts a game is worse than useless, because
+it fails in the only situation anyone cares about.
+
+Because `RecordArea` takes coordinates rather than a connector, a stale rectangle would not error
+after a monitor is unplugged — it would silently record whatever now occupies those coordinates.
+So the target is resolved fresh on every rebuild, and R4's fallback triggers on the **connector**
+disappearing, not on index resolution failing. Re-resolving an index cannot detect this: unplug the
+middle screen of three and index 2 still resolves, just to a different monitor.
 
 **Cursor.** `cursor-mode: 0` (hidden), matching dxcam.
 

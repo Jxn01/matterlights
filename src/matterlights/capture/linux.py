@@ -91,6 +91,7 @@ class LinuxCaptureBackend:
         self._first_frame = threading.Event()
         self._invalidated = threading.Event()
         self._fallback_target: str | None = None
+        self._expected_connector: str = ""
 
     def _default_source(self):
         from matterlights.capture.mutter import MutterSource
@@ -161,24 +162,45 @@ class LinuxCaptureBackend:
         self._first_frame.clear()
         self._teardown_pipeline()
 
+        # If the physical screen we were recording has gone, say so and use the
+        # configured default until it comes back. Checking the CONNECTOR rather
+        # than re-resolving the index is what makes this real: unplug the middle
+        # screen of three and index 2 still resolves happily -- to a different
+        # monitor -- so an index check would never notice.
+        expected = self._expected_connector
+        if expected and not self._source.connector_present(expected):
+            fallback = self._fallback_target
+            if fallback is not None and fallback != capture_target:
+                self._logger.warning(
+                    "Screen %s is no longer attached; falling back to %r until it returns",
+                    expected,
+                    fallback,
+                )
+                capture_target_to_open = fallback
+            else:
+                capture_target_to_open = capture_target
+        else:
+            capture_target_to_open = capture_target
+
         try:
-            node_id = self._source.open_stream(capture_target)
-            target = capture_target
+            node_id = self._source.open_stream(capture_target_to_open)
         except (ValueError, MutterUnavailable) as error:
             fallback = self._fallback_target
-            if fallback is None or fallback == capture_target:
+            if fallback is None or fallback == capture_target_to_open:
                 raise
             self._logger.warning(
                 "Capture target %r unavailable (%s); falling back to %r",
-                capture_target,
+                capture_target_to_open,
                 error,
                 fallback,
             )
             node_id = self._source.open_stream(fallback)
-            target = capture_target  # keep the request, so a returning screen is retried
 
         self._start_pipeline(node_id)
-        self._active_target = target
+        # Keep the REQUESTED target, not the one actually opened, so a screen
+        # that comes back is picked up again on the next rebuild.
+        self._active_target = capture_target
+        self._expected_connector = getattr(self._source, "active_connector", "")
 
     def _start_pipeline(self, node_id: int) -> None:
         Gst = _gst()
@@ -266,8 +288,15 @@ def _gst():
         import gi
 
         gi.require_version("Gst", "1.0")
+        gi.require_version("GstApp", "1.0")
         gi.require_version("GstVideo", "1.0")
-        from gi.repository import Gst
+        # GstApp and GstVideo are imported for their SIDE EFFECT: they register
+        # the Python bindings for GstAppSink's methods and for the video meta.
+        # Without GstApp, an appsink has no ``try_pull_sample`` and the
+        # ``new-sample`` path is unverifiable; without GstVideo,
+        # ``_buffer_stride`` silently falls back to width*4 on every frame and a
+        # padded buffer shears the image.
+        from gi.repository import Gst, GstApp, GstVideo  # noqa: F401
     except (ImportError, ValueError) as error:
         raise MutterUnavailable(
             "GStreamer is not importable. MatterLights needs the system packages "

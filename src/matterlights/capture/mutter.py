@@ -22,6 +22,7 @@ which report this rig's 3840x2160 primary as 7680x4320.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import threading
 from typing import Callable
@@ -148,7 +149,10 @@ class MutterSource:
         self._stream_path: str | None = None
         self._subscriptions: list[int] = []
         self._on_invalidated: Callable[[str], None] | None = None
+        self._closing = False
+        self.active_connector: str = ""
         ensure_main_loop()
+        atexit.register(self.close)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -158,6 +162,10 @@ class MutterSource:
         self._on_invalidated = callback
 
     def close(self) -> None:
+        # Unsubscribe BEFORE stopping, and latch a flag as well: Mutter emits
+        # Stream.Closed in response to our own Stop(), and treating that as an
+        # invalidation would schedule a rebuild of a session we just retired.
+        self._closing = True
         for subscription in self._subscriptions:
             try:
                 self._bus.signal_unsubscribe(subscription)
@@ -171,17 +179,12 @@ class MutterSource:
                 self._logger.debug("ScreenCast session already closed", exc_info=True)
         self._session_path = None
         self._stream_path = None
+        self._closing = False
 
     # -- monitors ----------------------------------------------------------
 
     def list_monitors(self) -> list[Monitor]:
-        """Every logical monitor, sorted by position, 1-based.
-
-        Sorted by ``(x, y)`` rather than by whatever order Mutter returns, so a
-        given screen keeps the same index across reboots -- otherwise
-        ``SCREEN_CAPTURE_TARGET=2`` would silently mean a different screen after
-        a replug.
-        """
+        """Every logical monitor, sorted by position, 1-based."""
 
         state = self._bus.call_sync(
             DISPLAY_CONFIG_NAME,
@@ -194,117 +197,94 @@ class MutterSource:
             5000,
             None,
         ).unpack()
+        return parse_monitors(state)
 
-        _serial, physical_monitors, logical_monitors, _props = state
+    def connector_present(self, connector: str) -> bool:
+        """Is ``connector`` still attached?
 
-        modes_by_connector: dict[str, tuple[int, int]] = {}
-        for (connector, _vendor, _product, _serial_no), modes, _props in physical_monitors:
-            for mode in modes:
-                mode_props = mode[6] if len(mode) > 6 else {}
-                if mode_props.get("is-current"):
-                    modes_by_connector[connector] = (int(mode[1]), int(mode[2]))
-                    break
+        This is what gives the "selected screen was disconnected" fallback a
+        real trigger. Index-based targets alone cannot provide one: unplug the
+        middle screen of three and index 2 still resolves -- to a different
+        physical monitor.
+        """
 
-        entries: list[tuple[int, int, Monitor]] = []
-        for x_pos, y_pos, scale, transform, primary, monitor_specs, _props in logical_monitors:
-            if not monitor_specs:
-                continue
-            connector = monitor_specs[0][0]
-            mode_width, mode_height = modes_by_connector.get(connector, (0, 0))
-            width = round(mode_width / scale) if scale else mode_width
-            height = round(mode_height / scale) if scale else mode_height
-            if int(transform) in _ROTATED_TRANSFORMS:
-                width, height = height, width
-            entries.append(
-                (
-                    int(x_pos),
-                    int(y_pos),
-                    Monitor(
-                        index=0,  # replaced below, once sorted
-                        left=int(x_pos),
-                        top=int(y_pos),
-                        width=int(width),
-                        height=int(height),
-                        is_primary=bool(primary),
-                        name=str(connector),
-                    ),
-                )
-            )
-
-        entries.sort(key=lambda item: (item[0], item[1]))
-        ordered = [
-            Monitor(
-                index=position,
-                left=monitor.left,
-                top=monitor.top,
-                width=monitor.width,
-                height=monitor.height,
-                is_primary=monitor.is_primary,
-                name=monitor.name,
-            )
-            for position, (_x, _y, monitor) in enumerate(entries, start=1)
-        ]
-        return [_bounding_box(ordered), *ordered]
+        if not connector:
+            return True
+        try:
+            return any(monitor.name == connector for monitor in self.list_monitors()[1:])
+        except Exception:  # noqa: BLE001 - cannot ask means do not claim it is gone
+            return True
 
     def resolve_target(self, capture_target: str) -> Monitor | None:
         """Map a capture target onto a monitor, or None for the ``all`` box."""
 
-        monitors = self.list_monitors()
-        normalized = capture_target.strip().lower()
-        if normalized == "all":
-            return None
-        if normalized == "primary":
-            for monitor in monitors[1:]:
-                if monitor.is_primary:
-                    return monitor
-            return monitors[1] if len(monitors) > 1 else None
-        index = int(normalized)
-        for monitor in monitors[1:]:
-            if monitor.index == index:
-                return monitor
-        raise ValueError(
-            f"Monitor index {index} is not available ({len(monitors) - 1} screen(s) attached)"
-        )
+        return resolve_from_monitors(self.list_monitors(), capture_target)
 
     # -- streaming ---------------------------------------------------------
 
     def open_stream(self, capture_target: str) -> int:
-        """Start recording ``capture_target`` and return its PipeWire node id."""
+        """Start recording ``capture_target`` and return its PipeWire node id.
+
+        ⚠️ **Always ``RecordArea``, never ``RecordMonitor`` -- including for a
+        single screen.** Measured on this rig 2026-09-08: ``RecordMonitor`` on
+        DP-2 (a Dell 32" at 3840x2160@240 with ``refresh-rate-mode: variable``)
+        delivered **no frames at all**, while ``RecordArea`` over that monitor's
+        identical rectangle delivered one in under 0.1 s. The two 60 Hz outputs
+        worked either way. VRR is the only property that differs between the
+        failing output and the working ones, but causation is UNCONFIRMED -- and
+        it is intermittent: the same call succeeded earlier the same day, which
+        fits VRR engaging on content.
+
+        That intermittency is exactly why there is no per-monitor special case
+        here. One path that always works beats a fast path that works until the
+        user starts a game -- on the primary gaming monitor, which is the whole
+        point of this program.
+
+        The target is resolved FRESH on every call. It has to be: ``RecordArea``
+        takes coordinates, not a connector, so a stale rectangle would not fail
+        after a monitor is unplugged -- it would silently record whatever now
+        occupies those coordinates, and the caller's fallback would never fire.
+        """
 
         self.close()
 
         monitor = self.resolve_target(capture_target)
+        if monitor is None:
+            monitor = self.list_monitors()[0]
+            self._logger.info(
+                "Recording the whole desktop: %dx%d at (%d, %d)",
+                monitor.width,
+                monitor.height,
+                monitor.left,
+                monitor.top,
+            )
+        else:
+            self._logger.info(
+                "Recording %s (index %d): %dx%d at (%d, %d)",
+                monitor.name,
+                monitor.index,
+                monitor.width,
+                monitor.height,
+                monitor.left,
+                monitor.top,
+            )
+        self.active_connector = monitor.name
+
         session_path = self._call(
             SCREENCAST_PATH, SCREENCAST_NAME, "CreateSession", self._GLib.Variant("(a{sv})", ({},))
         ).unpack()[0]
         self._session_path = session_path
 
         properties = {"cursor-mode": self._GLib.Variant("u", _CURSOR_MODE_HIDDEN)}
-        if monitor is None:
-            box = self.list_monitors()[0]
-            self._logger.info(
-                "Recording the whole desktop: %dx%d at (%d, %d)",
-                box.width,
-                box.height,
-                box.left,
-                box.top,
-            )
-            stream_path = self._call(
-                session_path,
-                f"{SCREENCAST_NAME}.Session",
-                "RecordArea",
-                self._GLib.Variant(
-                    "(iiiia{sv})", (box.left, box.top, box.width, box.height, properties)
-                ),
-            ).unpack()[0]
-        else:
-            self._logger.info("Recording monitor %s (index %d)", monitor.name, monitor.index)
-            stream_path = self._call(
-                session_path,
-                f"{SCREENCAST_NAME}.Session",
-                "RecordMonitor",
-                self._GLib.Variant("(sa{sv})", (monitor.name, properties)),
-            ).unpack()[0]
+        stream_path = self._call(
+            session_path,
+            f"{SCREENCAST_NAME}.Session",
+            "RecordArea",
+            self._GLib.Variant(
+                "(iiiia{sv})",
+                (monitor.left, monitor.top, monitor.width, monitor.height, properties),
+            ),
+        ).unpack()[0]
         self._stream_path = stream_path
 
         node_id: dict[str, int | None] = {"id": None}
@@ -344,6 +324,8 @@ class MutterSource:
 
         def invalidate(reason: str):
             def handler(*_args):
+                if self._closing:
+                    return
                 self._logger.warning("Capture session invalidated (%s); rebuilding", reason)
                 callback = self._on_invalidated
                 if callback is not None:
@@ -382,6 +364,96 @@ class MutterSource:
             10000,
             None,
         )
+
+
+def parse_monitors(state: tuple) -> list[Monitor]:
+    """Turn ``DisplayConfig.GetCurrentState`` into a positioned monitor list.
+
+    Pure so the arithmetic can be tested against recorded output. Three things
+    here are easy to get wrong and all three have a wrong answer that looks
+    plausible:
+
+    * **Scale.** A logical monitor's size is its mode divided by its scale. This
+      rig's portrait panels run 3840x2160 at 1.25, so they are 3072x1728
+      logical -- not 3840x2160.
+    * **Rotation.** Transforms 1/3/5/7 are the quarter turns and swap the axes,
+      so those panels end up 1728x3072. ``RecordArea`` was measured returning
+      2160x3840 for that rectangle, i.e. the logical box rendered at the
+      monitor's own scale -- which is why zones stay physically meaningful.
+    * **Order.** Sorted by position, so index 2 keeps meaning the same screen
+      across reboots. Mutter's own ordering is not stable enough to index into.
+    """
+
+    _serial, physical_monitors, logical_monitors, _props = state
+
+    modes_by_connector: dict[str, tuple[int, int]] = {}
+    for (connector, _vendor, _product, _serial_no), modes, _monitor_props in physical_monitors:
+        for mode in modes:
+            mode_props = mode[6] if len(mode) > 6 else {}
+            if mode_props.get("is-current"):
+                modes_by_connector[connector] = (int(mode[1]), int(mode[2]))
+                break
+
+    entries: list[tuple[int, int, Monitor]] = []
+    for x_pos, y_pos, scale, transform, primary, monitor_specs, _lm_props in logical_monitors:
+        if not monitor_specs:
+            continue
+        connector = monitor_specs[0][0]
+        mode_width, mode_height = modes_by_connector.get(connector, (0, 0))
+        width = round(mode_width / scale) if scale else mode_width
+        height = round(mode_height / scale) if scale else mode_height
+        if int(transform) in _ROTATED_TRANSFORMS:
+            width, height = height, width
+        entries.append(
+            (
+                int(x_pos),
+                int(y_pos),
+                Monitor(
+                    index=0,
+                    left=int(x_pos),
+                    top=int(y_pos),
+                    width=int(width),
+                    height=int(height),
+                    is_primary=bool(primary),
+                    name=str(connector),
+                ),
+            )
+        )
+
+    entries.sort(key=lambda item: (item[0], item[1]))
+    ordered = [
+        Monitor(
+            index=position,
+            left=monitor.left,
+            top=monitor.top,
+            width=monitor.width,
+            height=monitor.height,
+            is_primary=monitor.is_primary,
+            name=monitor.name,
+        )
+        for position, (_x, _y, monitor) in enumerate(entries, start=1)
+    ]
+    return [_bounding_box(ordered), *ordered]
+
+
+def resolve_from_monitors(monitors: list[Monitor], capture_target: str) -> Monitor | None:
+    """Map a capture target onto one of ``monitors``. ``None`` means "all"."""
+
+    normalized = capture_target.strip().lower()
+    if normalized == "all":
+        return None
+    if normalized == "primary":
+        for monitor in monitors[1:]:
+            if monitor.is_primary:
+                return monitor
+        return monitors[1] if len(monitors) > 1 else None
+    index = int(normalized)
+    for monitor in monitors[1:]:
+        if monitor.index == index:
+            return monitor
+    raise ValueError(
+        f"Monitor index {index} is not available ({len(monitors) - 1} screen(s) attached)"
+    )
 
 
 def _bounding_box(monitors: list[Monitor]) -> Monitor:
