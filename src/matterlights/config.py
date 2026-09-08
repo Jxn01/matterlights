@@ -178,10 +178,20 @@ def _parse_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Explicit ways to say "log to stdout only, no file". An EMPTY value cannot mean
+# this, because get_value() treats empty as unset and falls through to the
+# default -- so a word is needed. Used by the system-level shutdown unit, which
+# runs as root: without it, root resolves the state directory to /root and
+# leaves a second copy of the log where nobody will ever look for it, while the
+# journal already has the same lines.
+_LOG_PATH_DISABLED = frozenset({"none", "off", "-"})
+
+
 def _parse_log_path(value: str, base_dir: Path) -> Path | None:
-    if not value.strip():
+    stripped = value.strip()
+    if not stripped or stripped.lower() in _LOG_PATH_DISABLED:
         return None
-    return _resolve_path(Path(value).expanduser(), base_dir)
+    return _resolve_path(Path(stripped).expanduser(), base_dir)
 
 
 def _parse_optional_path(value: str, base_dir: Path) -> Path | None:

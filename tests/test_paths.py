@@ -36,3 +36,35 @@ class StateDirTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LogPathDisableTest(unittest.TestCase):
+    """LOG_PATH can be explicitly turned off, not just left unset.
+
+    An EMPTY value cannot mean this: load_settings treats empty as unset and
+    falls through to the per-OS default. The system-level shutdown unit needs a
+    real way to say "journal only", or root writes a second copy of the log to
+    /root where nobody will look for it.
+    """
+
+    def test_none_off_and_dash_all_disable_file_logging(self) -> None:
+        from matterlights.config import _parse_log_path
+
+        for value in ("none", "NONE", "off", "-", " none "):
+            with self.subTest(value=value):
+                self.assertIsNone(_parse_log_path(value, Path("/tmp")))
+
+    def test_empty_also_disables(self) -> None:
+        from matterlights.config import _parse_log_path
+
+        self.assertIsNone(_parse_log_path("   ", Path("/tmp")))
+
+    def test_a_real_path_still_works(self) -> None:
+        from matterlights.config import _parse_log_path
+
+        self.assertEqual(Path("/var/log/x.log"), _parse_log_path("/var/log/x.log", Path("/tmp")))
+
+    def test_a_relative_path_resolves_against_the_base_dir(self) -> None:
+        from matterlights.config import _parse_log_path
+
+        self.assertEqual(Path("/tmp/x.log"), _parse_log_path("x.log", Path("/tmp")))

@@ -53,16 +53,23 @@ class SignalHookTest(unittest.TestCase):
         hook.wait_for_callback(2.0)
         self.assertEqual([1, 1], self.calls)
 
-    def test_a_failing_callback_does_not_escape(self) -> None:
-        """Losing the turn-off is better than losing the program."""
+    def test_a_failing_callback_is_logged_and_does_not_escape(self) -> None:
+        """Losing the turn-off is better than losing the program.
+
+        assertLogs does double duty: it asserts the failure is actually
+        RECORDED -- swallowing it silently would be its own bug -- and it keeps
+        the expected traceback out of the test run's stderr.
+        """
 
         def boom() -> None:
             raise RuntimeError("Home Assistant unreachable")
 
         hook = SignalShutdownHook(boom, self.logger)
         self.addCleanup(hook.stop)
-        hook.fire("SIGTERM")
-        hook.wait_for_callback(2.0)
+        with self.assertLogs(self.logger, level="ERROR") as captured:
+            hook.fire("SIGTERM")
+            hook.wait_for_callback(2.0)
+        self.assertIn("Home Assistant unreachable", "\n".join(captured.output))
 
     def test_start_installs_and_stop_restores_handlers(self) -> None:
         before = signal.getsignal(signal.SIGTERM)

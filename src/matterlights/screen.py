@@ -5,9 +5,35 @@ import json
 import logging
 from pathlib import Path
 
-from matterlights import capture as _capture
-
 LOGGER = logging.getLogger(__name__)
+
+
+def _backend():
+    """Import the capture package lazily, on first actual use.
+
+    ⚠️ **Deliberately not a module-scope import.** ``home_assistant`` imports
+    ``RgbColor`` from here, and ``lights_off`` imports ``home_assistant`` -- so a
+    top-level ``import matterlights.capture`` in this module drags the whole
+    capture stack into the shutdown helper.
+
+    That helper runs as root, during shutdown, from a system unit with no session
+    bus, and it exists to get exactly one HTTP request out before the machine
+    goes down. Importing GStreamer and PyGObject there costs import time it does
+    not have, and ``gi`` with no session bus can fail outright. The Windows side
+    documented the same constraint for dxcam long before Linux existed.
+
+    ``tests/test_lights_off_imports.py`` pins this.
+    """
+
+    from matterlights import capture
+
+    return capture.get_backend()
+
+
+def _reset_backend() -> None:
+    from matterlights import capture
+
+    capture.reset_backend()
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +127,7 @@ def list_monitors() -> list[dict[str, int | bool | str]]:
     zone designer serialise this straight to JSON.
     """
 
-    return [monitor.as_dict() for monitor in _capture.get_backend().list_monitors()]
+    return [monitor.as_dict() for monitor in _backend().list_monitors()]
 
 
 class _CaptureSession:
@@ -114,11 +140,11 @@ class _CaptureSession:
     and this is simply the handle callers hold onto.
     """
 
-    def __enter__(self) -> "_capture.CaptureBackend":
-        return _capture.get_backend()
+    def __enter__(self):
+        return _backend()
 
     def __exit__(self, *exc_info: object) -> None:
-        _capture.reset_backend()
+        _reset_backend()
 
 
 def capture_session() -> _CaptureSession:
@@ -126,7 +152,7 @@ def capture_session() -> _CaptureSession:
 
 
 def capture_screen_png(capture_target: str = "primary") -> tuple[bytes, int, int]:
-    return _capture.get_backend().grab_png(capture_target)
+    return _backend().grab_png(capture_target)
 
 
 def capture_screen_thumbnail_png(
@@ -139,7 +165,7 @@ def capture_screen_thumbnail_png(
     striding keeps this dependency-free (no Pillow) and is plenty for a thumbnail.
     """
 
-    return _capture.get_backend().grab_png(capture_target, max_width)
+    return _backend().grab_png(capture_target, max_width)
 
 
 def capture_zone_colors(
@@ -158,7 +184,7 @@ def capture_zone_samples(
     zones: list[ScreenZone] | None = None,
 ) -> list[ZoneSample]:
     resolved_zones = zones or [ScreenZone("full", *_ZONE_PRESETS["full"])]
-    raw, width, height = _capture.get_backend().grab(capture_target)
+    raw, width, height = _backend().grab(capture_target)
     return sample_zone_samples_from_screenshot(
         raw,
         width,
@@ -170,7 +196,7 @@ def capture_zone_samples(
 
 
 def capture_raw_with_session(
-    session: "_capture.CaptureBackend", capture_target: str = "primary"
+    session, capture_target: str = "primary"
 ) -> tuple[bytes, int, int]:
     """Grab one frame and return its raw BGRx buffer plus dimensions.
 
@@ -183,7 +209,7 @@ def capture_raw_with_session(
 
 
 def capture_zone_samples_with_session(
-    session: "_capture.CaptureBackend",
+    session,
     sample_stride: int,
     color_boost: float = 1.15,
     capture_target: str = "primary",

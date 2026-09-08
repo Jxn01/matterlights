@@ -13,6 +13,18 @@ import unittest
 UNIT_DIR = Path(__file__).resolve().parents[1] / "systemd"
 
 
+def read_raw(name: str) -> str:
+    """The unit file as text.
+
+    systemd ACCUMULATES repeated directives -- several ``Environment=`` lines
+    all take effect -- while configparser keeps only the last one. So anything
+    that can legitimately appear more than once has to be checked against the
+    raw text, or the test quietly reads a single value and calls the rest missing.
+    """
+
+    return (UNIT_DIR / name).read_text()
+
+
 def read_unit(name: str) -> configparser.ConfigParser:
     parser = configparser.ConfigParser(strict=False)
     # systemd keys are case-sensitive; configparser lowercases them by default.
@@ -60,8 +72,7 @@ class UserUnitTest(unittest.TestCase):
     def test_env_file_is_explicit(self) -> None:
         for name in self.UNITS:
             with self.subTest(unit=name):
-                unit = read_unit(name)
-                self.assertIn("MATTERLIGHTS_ENV_FILE", unit["Service"]["Environment"])
+                self.assertIn("Environment=MATTERLIGHTS_ENV_FILE=", read_raw(name))
 
 
 class SystemUnitTest(unittest.TestCase):
@@ -89,7 +100,18 @@ class SystemUnitTest(unittest.TestCase):
     def test_env_file_is_explicit_because_root_has_no_useful_cwd(self) -> None:
         """Runs as root with cwd=/, so relative .env discovery finds nothing."""
 
-        self.assertIn("MATTERLIGHTS_ENV_FILE", self.unit["Service"]["Environment"])
+        self.assertIn("Environment=MATTERLIGHTS_ENV_FILE=", read_raw(self.NAME))
+
+    def test_logs_to_the_journal_only(self) -> None:
+        """As root the state dir resolves to /root, which nobody ever reads.
+
+        StandardOutput=journal already captures the same lines, so the file copy
+        is pure noise in a directory the user cannot see.
+        """
+
+        raw = read_raw(self.NAME)
+        self.assertIn("Environment=LOG_PATH=none", raw)
+        self.assertIn("StandardOutput=journal", raw)
 
     def test_installed_at_system_level(self) -> None:
         """A USER unit dies with the session and so cannot report the session
