@@ -388,14 +388,94 @@ skipped** (baseline was 7 passing / 7 skipped / 5 erroring).
 - Colour engine proven **byte-identical** to pre-port (all 30 definitions).
 - Memory flat at 174 MB over 30 s.
 
+### Second verification pass
+
+Prompted by a completion check that (correctly) refused "ready to push" while
+Windows, reboot and logout were all listed as unverified. Two of the three moved.
+
+- **The logout mechanism is now observed, not asserted.** Logout stops
+  `graphical-session.target`, which stops the sync unit via `PartOf=`, which is a
+  SIGTERM. Sending that SIGTERM directly is the same code path:
+  `systemctl --user stop matterlights-sync` logged
+  `Session ending (SIGTERM); turning lights off` and the unit was gone 291 ms
+  later. What remains unobserved is only whether GNOME stops the target on
+  logout, which is systemd/GNOME behaviour rather than this program's.
+
+- 🚨 **A REAL BUG, found by reading that journal rather than the code.** As the
+  monitor powers down, Mutter closes the screencast session and then refuses to
+  create a new one -- `Session creation inhibited` -- until this program's own
+  display-power watcher notices the display is off. Measured window: **687 ms**
+  (session closed 23:04:28.051, display-off seen 23:04:28.738). Inside it the
+  loop rebuilt the session, the `GError` escaped unhandled, and a routine screen
+  sleep produced an ERROR traceback plus a **5-second** retry backoff -- 7 ms
+  before the display-off path would have run anyway.
+
+  Fixed as a class, not an instance: the translation lives in
+  `MutterSource._call`, the single choke point every ScreenCast method goes
+  through, so `CreateSession`, `RecordArea` and `Stop` are all covered. The new
+  `CaptureUnavailable` is deliberately **not** a `MutterUnavailable`, because
+  that one means "try the fallback screen" and falling back cannot help when the
+  whole service is inhibited and every target fails identically.
+
+  Measured on the same screen-sleep cycle after the fix: one INFO line, zero
+  tracebacks, lights off **1.02 s** after the inhibit instead of stalling past
+  the backoff. Repeated identical `Recording <target>` lines dropped to debug --
+  retrying on the sync interval had turned a useful line into four copies in
+  650 ms.
+
+- 🚨 **`__pycache__` can survive a file restore and silently run the OLD code.**
+  Cost roughly half an hour and produced two confident wrong diagnoses. While
+  validating that the new handler-order guard test can actually fail, the
+  regression was injected by *permuting two blocks* of `main.py` and then
+  restoring from a backup. Python validates a `.pyc` against
+  `(source_mtime_in_WHOLE_SECONDS, source_size)`. A permutation has the identical
+  size, and the inject/restore happened inside the same second -- so the poisoned
+  bytecode stayed "valid" and the service kept running the injected order across
+  two restarts, reproducing a bug that no longer existed on disk.
+
+  Everything that reads *source* said the code was correct (`inspect.getsource`,
+  the AST check, the guard test itself), which is exactly why the contradiction
+  was so hard to see: the guard test reads the file while the interpreter runs
+  the cache. It was only settled by putting a probe inside the handler that
+  fired, changing the file size and thereby invalidating the cache -- the probe
+  fixed the symptom by existing, which is its own lesson.
+
+  A first attempt to check this was ALSO wrong: `sorted(glob("main.*.pyc"))[0]`
+  returned `main.cpython-313.pyc` while the venv runs 3.14, so the right
+  hypothesis was dismissed using the wrong file. **When a running process and the
+  source disagree, purge `__pycache__` before theorising** -- and when inspecting
+  a `.pyc`, select it by the interpreter's own tag, never by sort order.
+
+- **Windows moved from "it compiles" to "the wiring executes".**
+  `tests/test_windows_wiring.py` runs the Windows modules ON LINUX under a thin
+  fake: only `sys.platform`, `ctypes.windll` and `ctypes.WINFUNCTYPE` are faked,
+  because `ctypes.wintypes` imports fine on Linux and `mss` is already installed.
+  It asserts the seams the port actually moved -- all four Windows modules
+  import, every factory returns the Windows class and never a Linux one, no
+  `*.linux` module is imported under win32, the constants that earlier surgery
+  stripped are present, `as_dict()` still emits the Task Scheduler key names the
+  dashboard's JavaScript reads, and R2 holds with DXGI in play rather than
+  GStreamer. The R2 check carries a companion test proving the measurement can
+  fail, after the first version of it passed for the wrong reason.
+
+  Deliberately NOT faked: the Win32 message loops. The fake answers every call
+  with "1, fine", so growing it until `WM_QUERYENDSESSION` runs would build a
+  simulator that mostly tests itself. That code is verbatim from the pre-port
+  commits and is covered by the 7 Windows-only tests when the suite runs there.
+
+- **The Windows clone was inspected read-only** at
+  `/mnt/windows-c/Users/jxnpe/Projects/matterlights`: on `main` at `1473dec`,
+  no uncommitted work beyond an untracked `.claude/`, nothing unpushed, and its
+  venv already carries `dxcam`, `mss` and `requests`. So the branch will pull
+  cleanly there and the Windows-only tests have what they need to run.
+
 ### NOT verified
 
-- **Windows.** Cannot be run from here. Evidence is static only: every module
-  compiles, the undefined-name scan is clean, and the Windows implementations
-  were reconstructed from git rather than hand-edited after a first attempt
-  stripped their constant blocks.
+- **Windows at runtime.** The wiring executes under a fake; the actual Win32
+  calls, DXGI capture and Task Scheduler registration still need Windows. There
+  is exactly one way to get that on this rig -- boot Windows and pull the branch
+  -- so it is *post-pull* verification, not a *pre-push* gate.
 - **A real reboot.** `ExecStop` was exercised via `systemctl stop`, which runs
   the identical command as root; the shutdown ordering itself is unproven.
-- **A real logout.** `PartOf=graphical-session.target` is asserted by test and by
-  systemd semantics, not observed.
+  After the next reboot, `journalctl -b -1 -u matterlights-lights-off` shows it.
 - **HDR colour fidelity** — accepted as out of scope by the owner.
