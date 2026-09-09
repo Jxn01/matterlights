@@ -469,13 +469,61 @@ Windows, reboot and logout were all listed as unverified. Two of the three moved
   venv already carries `dxcam`, `mss` and `requests`. So the branch will pull
   cleanly there and the Windows-only tests have what they need to run.
 
+### Closed after the merge — both remaining gaps verified 2026-09-09
+
+- ✅ **A real reboot.** Observed in `journalctl -b -1`, shutdown of 2026-09-09
+  01:43:51. Both layers fired and the ordering held with room to spare:
+
+  | Time | Event |
+  |---|---|
+  | `51.423` | user unit SIGTERM hook — `Session ending (SIGTERM); turning lights off` |
+  | `51.575` | system unit `ExecStop` — `Session ending; turning lights off` |
+  | `51.608` | `Session ending; lights off` — 33 ms to confirm |
+  | `53.025` | NetworkManager *begins* stopping — 1.4 s later |
+
+  So `After=network-online.target` did what it was chosen to do: the turn-off
+  completed while the network was still up, with a 1.4 s margin.
+
+- ✅ **Windows at runtime**, verified by the owner on the real machine. Two
+  fixes came back, `6a17c01` and `c823027`, and both are now on `main`.
+
+- 🚨 **One of those was mine, and it is a trap worth generalising.**
+  `paths.state_dir()` called `Path.home()` unguarded. On POSIX that *cannot*
+  fail -- with `HOME` unset it falls back to the passwd database -- while on
+  Windows it is purely environmental (`USERPROFILE`, or `HOMEDRIVE`+`HOMEPATH`)
+  and raises `RuntimeError` when none is set. So the code was provably safe on
+  the platform the port was developed on and a live exception path on the other.
+
+  It was worse than a misplaced log file: `load_settings()` computes the default
+  log path as an *argument expression*, evaluated on every call even when
+  `LOG_PATH` is set, so the raise was a startup crash for every entry point --
+  including `lights_off` under the SYSTEM shutdown task, whose entire job is to
+  run while the machine goes down.
+
+  **The general lesson: a cross-platform port's most dangerous bugs are the ones
+  the development platform cannot reach.** No Linux test could have caught this,
+  because on Linux the failure mode does not exist. The fix guards it in `paths`
+  and adds an AST guard confining `Path.home()`/`expanduser()` to that one
+  module, with tests that force the raising behaviour on *both* platforms.
+
+- ✅ **Checked whether Linux had the sibling of the Windows restart race**
+  (`c823027`: `Stop-ScheduledTask` is async, so stop→start relaunched into a
+  still-held mutex and left the service silently stopped). It does not.
+  Exercised through the real `service_control.restart()`: sync 5× and zone-UI 3×,
+  every one left the unit active, zero `already running` warnings, no stray PIDs.
+  `systemctl restart` is a single synchronous job, so the pattern cannot occur.
+
+### Known behaviour, not a defect
+
+- **Greyscale content lights the bulbs white.** A neutral grey screen sits above
+  `DARK_THRESHOLD` (so the dark cutoff never fires) while carrying almost no
+  saturation -- measured `(28,29,28)`, saturation 1/255. Home Assistant stores
+  colour as hue/saturation, so a fully desaturated colour *is* white, and
+  `BRIGHTNESS_FLOOR=255` pins it to full brightness. Identical code and identical
+  `.env` on both platforms, so this is a tuning gap in the ambience model rather
+  than anything the port introduced. Raising `DARK_THRESHOLD` would cut such
+  screens off instead of lighting them white. Left as-is by the owner.
+
 ### NOT verified
 
-- **Windows at runtime.** The wiring executes under a fake; the actual Win32
-  calls, DXGI capture and Task Scheduler registration still need Windows. There
-  is exactly one way to get that on this rig -- boot Windows and pull the branch
-  -- so it is *post-pull* verification, not a *pre-push* gate.
-- **A real reboot.** `ExecStop` was exercised via `systemctl stop`, which runs
-  the identical command as root; the shutdown ordering itself is unproven.
-  After the next reboot, `journalctl -b -1 -u matterlights-lights-off` shows it.
 - **HDR colour fidelity** — accepted as out of scope by the owner.
