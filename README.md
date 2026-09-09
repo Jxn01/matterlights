@@ -243,6 +243,15 @@ The dashboard shows:
 - recent log output
 - controls for starting, stopping, and restarting the sync loop or zone designer
 
+⚠️ **On Windows, "Restart" waits for the task to actually stop before starting it.**
+`Stop-ScheduledTask` is asynchronous — it signals termination and returns while the
+process is still alive. Starting the task again immediately launches a second sync
+loop, which finds the single-instance mutex still held and exits. The service is then
+left *stopped*, while Task Scheduler records `LastTaskResult: 0` and the dashboard
+reports success. So the restart polls the task state until it stops being Running --
+up to 40 polls, roughly 10-30 seconds of wall clock, since each poll spawns PowerShell.
+`systemctl restart` is synchronous, so the Linux backend needs none of this.
+
 Manual start:
 
 ```powershell
@@ -529,6 +538,20 @@ MatterLights looks best when it is used as ambient room lighting, not as a frame
 The sync loop's unit is probably not tied to the graphical session. Check that
 `systemctl --user cat matterlights-sync` shows `PartOf=graphical-session.target`.
 With lingering enabled and that line missing, the unit survives logout.
+
+### Windows: the dashboard says "Restarted" but sync is not running
+
+Look in the log for `Another MatterLights sync loop is already running` next to a
+`still reports Running after 40 status polls` warning. Together they mean the
+restart's stop-wait expired and the new instance hit the single-instance mutex, so
+nothing is running even though every status said success. Start it again:
+
+```powershell
+Start-ScheduledTask -TaskName 'MatterLights Screen Sync'
+```
+
+If it recurs, the sync loop is outliving the whole poll budget — raise
+`_STOP_WAIT_POLLS` in `src/matterlights/service_control/windows.py`.
 
 ### Black scenes do not dim enough
 

@@ -11,6 +11,18 @@ service-control protocol. Every quirk documented here was already load-bearing:
   would be taken down before it could restart anything.
 * The zone designer is launched detached, with the process-group and no-window
   flags, so it survives the dashboard and opens no console.
+
+And one quirk that was NOT load-bearing, because it was broken:
+
+* ``Stop-ScheduledTask`` IS ASYNCHRONOUS. It signals termination and returns
+  while the process is still alive, so the obvious
+  ``Stop-ScheduledTask ; Start-ScheduledTask`` starts the new instance before
+  the old one has gone. The new instance then finds the single-instance mutex
+  held and exits cleanly, the old one finishes dying, and the service is left
+  STOPPED while Task Scheduler records ``LastTaskResult: 0`` and the dashboard
+  reports success. ``restart`` therefore waits for the task to stop being
+  reported as Running before starting it -- see :meth:`_wait_until_stopped`.
+  The systemd backend needs none of this: ``systemctl restart`` already waits.
 """
 
 from __future__ import annotations
@@ -21,6 +33,7 @@ import logging
 from pathlib import Path
 import subprocess
 import sys
+import time
 from typing import Any
 
 from matterlights.service_control import DASHBOARD, SYNC, ZONE_UI, ServiceStatus
@@ -40,6 +53,14 @@ def _repo_root() -> Path:
 
 
 class WindowsServiceControl:
+    # A POLL BUDGET, not a time budget: each poll spawns PowerShell (~0.5s
+    # observed) on top of the sleep, so 40 polls is roughly 10-30s of wall clock
+    # depending on how slow the spawns are. Deliberately generous -- the observed
+    # gap between Stop-ScheduledTask returning and the process actually dying was
+    # ~1.1s (two polls), but a sync loop mid Home Assistant request unwinds slower.
+    _STOP_WAIT_POLLS = 40
+    _STOP_POLL_SECONDS = 0.25
+
     def __init__(self, logger: logging.Logger | None = None) -> None:
         self._logger = logger or LOGGER
 
@@ -62,11 +83,38 @@ class WindowsServiceControl:
             self._stop_module_processes(ZONE_UI_MODULE)
             self._launch_zone_ui()
             return
-        name = _ps_quote(TASK_NAMES[service])
-        self._run(
-            f"Stop-ScheduledTask -TaskName '{name}' -ErrorAction SilentlyContinue ; "
-            f"Start-ScheduledTask -TaskName '{name}' -ErrorAction Stop"
-        )
+
+        self.stop(service)
+        if not self._wait_until_stopped(service):
+            self._logger.warning(
+                "%s still reports Running after %d status polls; starting anyway. If the new "
+                "instance exits immediately, the single-instance lock was still held by the old one.",
+                TASK_NAMES[service],
+                self._STOP_WAIT_POLLS,
+            )
+        self.start(service)
+
+    def _wait_until_stopped(self, service: str) -> bool:
+        """Poll until Task Scheduler stops reporting the task as Running.
+
+        Returns True if it stopped, False if it was still Running when the
+        budget ran out -- the caller starts it regardless, because refusing to
+        start a service the user asked to restart is the worse failure.
+
+        Bounded by a POLL COUNT rather than a wall-clock deadline so the
+        behaviour is deterministic under test with :meth:`_sleep` stubbed out.
+        """
+
+        for _ in range(self._STOP_WAIT_POLLS):
+            if self.status(service).state.lower() != "running":
+                return True
+            self._sleep(self._STOP_POLL_SECONDS)
+        return False
+
+    def _sleep(self, seconds: float) -> None:
+        """Seam so tests can exercise the wait without actually waiting."""
+
+        time.sleep(seconds)
 
     def is_running(self, service: str) -> bool:
         if service == ZONE_UI:
