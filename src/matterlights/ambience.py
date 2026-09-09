@@ -150,6 +150,31 @@ def build_ambience_zone_samples(
     ]
 
 
+def split_near_far(zone_samples: list[ZoneSample]) -> tuple[RgbColor, RgbColor]:
+    """One representative colour for each group, for consumers outside the bulbs.
+
+    The bulbs get a distinct colour per lamp -- ``_render_group_colors`` renders
+    as many as the group has members. A consumer that only wants "the near
+    colour" and "the far colour" (the RGB extension) needs a single pair, so
+    this takes the first sample of each group.
+
+    Falls back to the other group when one is empty, and to black when there are
+    no samples at all, so a caller never has to special-case an odd
+    configuration such as every light being marked near.
+    """
+
+    near = [sample.color for sample in zone_samples if sample.zone is _NEAR_ZONE]
+    far = [sample.color for sample in zone_samples if sample.zone is _FAR_ZONE]
+    if not near and not far:
+        black = RgbColor(0, 0, 0)
+        return black, black
+    if not near:
+        return far[0], far[0]
+    if not far:
+        return near[0], near[0]
+    return near[0], far[0]
+
+
 def sample_frame(raw: bytes, width: int, height: int, sample_stride: int) -> AmbienceFrame:
     """Distill one frame into a weighted palette plus global brightness stats."""
 

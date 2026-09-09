@@ -504,6 +504,39 @@ Example perimeter layout:
 LIGHT_ZONE_LAYOUT=top-left,top-center,top-right,bottom-right,bottom-center,bottom-left
 ```
 
+## Optional: local RGB extension (Linux)
+
+MatterLights can hand each tick's ambience colours to a separate program that
+drives RGB hardware on the same machine — motherboard headers, RAM, GPU, an AIO
+pump — so the case matches the lamps. The companion project is
+[`linux-rgb`](https://github.com/Jxn01/linux-rgb) (private; specific to one rig).
+
+**Off by default and inert when off.** With `RGB_EXTENSION_ENABLED=false` nothing
+is published, no socket is opened, the publisher module is never even imported,
+and the dashboard renders no RGB control.
+
+```ini
+RGB_EXTENSION_ENABLED=true
+RGB_PUBLISH_SOCKET=/run/user/1000/linux-rgb.sock
+```
+
+Enabled, two things change:
+
+* Each ambience frame is sent as one JSON datagram to that socket — near colour,
+  far colour, brightness, active ratio, and MatterLights' own `screen_dark`,
+  `display_on`, `lights_on` and `rgb_on` decisions.
+* The dashboard grows an **RGB: On / Off** switch beside the lights switch,
+  writing `rgbOn` into the same control file. One source of truth, so the two
+  can never disagree.
+
+⚠️ **The extension can never affect your lights.** Publishing is fire-and-forget
+on a datagram socket: no listener, a deleted socket or a slow reader all drop the
+frame silently and the sync loop carries on. This is asserted by tests, because
+the failure it prevents — bulbs going dark because an unrelated program stopped —
+would be the worst kind of coupling.
+
+Only `ambience` mode publishes. Custom colours and patterns drive the bulbs only.
+
 ## Practical expectations
 
 MatterLights looks best when it is used as ambient room lighting, not as a frame-perfect LED strip replacement.

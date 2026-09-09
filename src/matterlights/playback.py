@@ -78,6 +78,12 @@ class ControlState:
     # regardless of mode, until switched back on; it lives in the control file,
     # so it survives reboots of both the PC and the sync loop.
     lights_on: bool = True
+    # Same idea for the optional RGB extension (linux-rgb), which drives local
+    # RGB hardware from the same ambience colours. Kept here rather than in a
+    # second control file so there is exactly ONE source of truth that both the
+    # dashboard and the extension read. Defaults true: an existing control file
+    # written before this field existed should not leave the RGB dark forever.
+    rgb_on: bool = True
 
 
 def effective_capture_target(state: ControlState, default_target: str) -> str:
@@ -287,6 +293,7 @@ def control_state_to_payload(state: ControlState) -> dict:
         "mode": state.mode,
         "captureTarget": state.capture_target,
         "lightsOn": state.lights_on,
+        "rgbOn": state.rgb_on,
         "custom": {
             "type": custom.type,
             "brightness": custom.brightness,
@@ -325,6 +332,7 @@ def control_state_from_payload(payload: dict) -> ControlState:
         payload.get("captureTarget", payload.get("capture_target"))
     )
     lights_on = _parse_lights_on(payload.get("lightsOn", payload.get("lights_on", True)))
+    rgb_on = _parse_lights_on(payload.get("rgbOn", payload.get("rgb_on", True)))
 
     custom_payload = payload.get("custom") or {}
     if not isinstance(custom_payload, dict):
@@ -356,6 +364,7 @@ def control_state_from_payload(payload: dict) -> ControlState:
         mode=mode,
         capture_target=capture_target,
         lights_on=lights_on,
+        rgb_on=rgb_on,
         custom=CustomState(
             type=custom_type,
             brightness=brightness,

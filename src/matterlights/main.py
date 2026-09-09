@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import logging
 import time
 
-from matterlights.ambience import build_ambience_zone_samples, resolve_near_entity_ids
+from matterlights.ambience import build_ambience_zone_samples, resolve_near_entity_ids, split_near_far
 from matterlights import capture as _capture
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
@@ -140,6 +140,16 @@ def main() -> int:
     screen_dark_active = False
     master_off_active = False
     display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
+
+    # Optional local RGB extension. Imported lazily and only when configured, so
+    # a disabled extension costs nothing -- not even an import -- and this
+    # program behaves exactly as it did before the extension existed.
+    rgb_publisher = None
+    if settings.rgb_extension_enabled and settings.rgb_publish_socket is not None:
+        from matterlights.rgb_publish import AmbiencePublisher
+
+        rgb_publisher = AmbiencePublisher(settings.rgb_publish_socket, LOGGER)
+        LOGGER.info("RGB extension enabled; publishing to %s", settings.rgb_publish_socket)
 
     def turn_off_all_lights() -> None:
         # Windows allows only a few seconds here. Every light gets identical
@@ -377,6 +387,15 @@ def main() -> int:
                             else:
                                 LOGGER.info("Watched screen (%s) is active again; restoring lights", capture_target)
 
+                        if rgb_publisher is not None:
+                            _publish_rgb_frame(
+                                rgb_publisher,
+                                zone_samples,
+                                screen_dark=screen_dark,
+                                display_on=display_on,
+                                control_state=control_state,
+                            )
+
                         preview_overrides = load_preview_overrides(settings.preview_override_file)
                         desired_states = _build_desired_states(
                             settings.light_entities,
@@ -456,6 +475,33 @@ def main() -> int:
         sync_lock.release()
 
 
+
+
+def _publish_rgb_frame(publisher, zone_samples, *, screen_dark, display_on, control_state) -> None:
+    """Hand this tick's colours to the local RGB extension.
+
+    Deliberately passes matterlights' own DECISIONS (``screen_dark``,
+    ``lights_on``) rather than the raw numbers behind them. The extension
+    mirrors the bulbs, and the only way to guarantee it agrees with them is for
+    it to obey the same verdicts instead of recomputing darkness from a palette
+    and drifting.
+
+    Never raises: the publisher swallows its own failures, and this adds no new
+    ones. The lights must not go dark because an RGB listener did.
+    """
+
+    near, far = split_near_far(zone_samples)
+    first = zone_samples[0] if zone_samples else None
+    publisher.publish(
+        (near.red, near.green, near.blue),
+        (far.red, far.green, far.blue),
+        brightness=first.average_brightness if first is not None else 0,
+        active_ratio=first.active_ratio if first is not None else 0.0,
+        screen_dark=screen_dark,
+        display_on=display_on,
+        lights_on=control_state.lights_on,
+        rgb_on=control_state.rgb_on,
+    )
 
 
 def _capture_zones_for_mode(color_sync_mode: str, light_zones: list[ScreenZone]) -> list[ScreenZone]:

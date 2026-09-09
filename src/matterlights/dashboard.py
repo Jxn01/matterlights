@@ -39,7 +39,10 @@ def handle_api_error(exc: Exception) -> tuple[Response | str, int]:
 
 @APP.get("/")
 def index() -> str:
-    return _page_html()
+    # The RGB control is rendered server-side only when the extension is
+    # configured, so a machine without it never ships the markup at all --
+    # there is no hidden button to discover in the DOM.
+    return _page_html(load_settings().rgb_extension_enabled)
 
 
 @APP.get("/api/status")
@@ -268,8 +271,13 @@ def _tail_log(log_path: Path | None, max_lines: int = 120) -> str:
     return "\n".join(lines[-max_lines:]) if lines else "Log file is empty."
 
 
-def _page_html() -> str:
+def _page_html(rgb_enabled: bool = False) -> str:
     title = escape("MatterLights Control")
+    rgb_toggle = (
+        '<button id="rgbToggle" class="power" type="button" disabled>RGB: &hellip;</button>'
+        if rgb_enabled
+        else ""
+    )
     return (
         """
 <!doctype html>
@@ -700,6 +708,7 @@ def _page_html() -> str:
       </div>
       <div class="links">
         <button id="powerToggle" class="power" type="button" disabled>Lights: …</button>
+        __RGB_TOGGLE__
         <a id="dashboardLink" class="primary" href="#">Dashboard</a>
         <a id="zoneUiLink" class="primary" href="#" target="_blank" rel="noreferrer">Open Zone Designer</a>
       </div>
@@ -1264,6 +1273,7 @@ def _page_html() -> str:
       solidKelvinValue.textContent = `${control.custom.solid.kelvin}K`;
 
       renderPowerToggle();
+      renderRgbToggle();
       renderFadeNote();
       renderSteps();
       renderDerived();
@@ -1319,6 +1329,7 @@ def _page_html() -> str:
         mode: payload.mode || 'autonomous',
         captureTarget: payload.captureTarget || null,
         lightsOn: payload.lightsOn !== false,
+        rgbOn: payload.rgbOn !== false,
         custom: {
           type: custom.type || 'solid',
           brightness: custom.brightness || 255,
@@ -1355,6 +1366,7 @@ def _page_html() -> str:
         mode: control.mode,
         captureTarget: control.captureTarget,
         lightsOn: control.lightsOn,
+        rgbOn: control.rgbOn,
         custom: {
           type: control.custom.type,
           brightness: control.custom.brightness,
@@ -1411,6 +1423,7 @@ def _page_html() -> str:
       const wasOn = control.lightsOn !== false;
       control.lightsOn = !wasOn;
       renderPowerToggle();
+      renderRgbToggle();
       statusBar.textContent = control.lightsOn ? 'Switching lights on…' : 'Switching lights off…';
       try {
         await postControl();
@@ -1420,9 +1433,44 @@ def _page_html() -> str:
       } catch (error) {
         control.lightsOn = wasOn;
         renderPowerToggle();
+      renderRgbToggle();
         statusBar.textContent = error.message;
       }
     });
+
+    // ---- RGB extension toggle ----
+    // The button only exists when RGB_EXTENSION_ENABLED is set, so every use is
+    // guarded on the element rather than on the flag. Same control file and the
+    // same POST as the lights switch, so the two can never disagree about state.
+    const RGB_ENABLED = __RGB_ENABLED__;
+    const rgbToggle = document.getElementById('rgbToggle');
+
+    function renderRgbToggle() {
+      if (!rgbToggle || !control) return;
+      rgbToggle.disabled = false;
+      const on = control.rgbOn !== false;
+      rgbToggle.textContent = on ? 'RGB: On' : 'RGB: Off';
+      rgbToggle.classList.toggle('power-off', !on);
+    }
+
+    if (rgbToggle) {
+      rgbToggle.addEventListener('click', async () => {
+        const wasOn = control.rgbOn !== false;
+        control.rgbOn = !wasOn;
+        renderRgbToggle();
+        statusBar.textContent = control.rgbOn ? 'Switching RGB on…' : 'Switching RGB off…';
+        try {
+          await postControl();
+          statusBar.textContent = control.rgbOn
+            ? 'RGB on — case lighting follows the screen.'
+            : 'RGB off — case lighting stays dark until switched back on.';
+        } catch (error) {
+          control.rgbOn = wasOn;
+          renderRgbToggle();
+          statusBar.textContent = error.message;
+        }
+      });
+    }
 
     // ---- Capture screen picker ----
     const screenMap = document.getElementById('screenMap');
@@ -1541,6 +1589,8 @@ def _page_html() -> str:
 </body>
 </html>
 """.replace("__TITLE__", title)
+        .replace("__RGB_TOGGLE__", rgb_toggle)
+        .replace("__RGB_ENABLED__", "true" if rgb_enabled else "false")
     )
 
 

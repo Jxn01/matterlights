@@ -18,6 +18,11 @@ class Settings:
     control_state_file: Path | None = None
     respect_display_sleep: bool = True
     turn_off_on_shutdown: bool = True
+    # Optional local RGB extension (linux-rgb). When disabled -- the default --
+    # nothing is published, the dashboard hides its RGB control entirely, and
+    # this program behaves exactly as it did before the extension existed.
+    rgb_extension_enabled: bool = False
+    rgb_publish_socket: Path | None = None
     # Home Assistant fallback: the sync loop refreshes this entity, and an HA
     # automation turns the lights off when it goes stale. Covers the cases
     # Windows never reports -- crash, hard reset, power cut. Empty disables it.
@@ -90,6 +95,10 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         ),
         respect_display_sleep=_parse_bool(get_value("RESPECT_DISPLAY_SLEEP", "true")),
         turn_off_on_shutdown=_parse_bool(get_value("TURN_OFF_ON_SHUTDOWN", "true")),
+        rgb_extension_enabled=_parse_bool(get_value("RGB_EXTENSION_ENABLED", "false")),
+        rgb_publish_socket=_parse_optional_path(
+            get_value("RGB_PUBLISH_SOCKET", ""), path_base_dir
+        ),
         heartbeat_entity_id=get_value("HEARTBEAT_ENTITY_ID", "sensor.matterlights_heartbeat").strip(),
         heartbeat_interval_seconds=float(get_value("HEARTBEAT_INTERVAL_SECONDS", "30.0")),
         color_sync_mode=get_value("COLOR_SYNC_MODE", "zoned").strip().lower(),
