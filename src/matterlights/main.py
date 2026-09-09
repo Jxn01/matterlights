@@ -288,6 +288,26 @@ def main() -> int:
                             enforce_lights_off(
                                 client, ordered_available, master_off_confirmed, settings.transition_seconds
                             )
+                        # The RGB extension has its own switch and is NOT silenced
+                        # by the lamps' master switch -- switching the bulbs off at
+                        # night should not also kill the case lighting. So keep
+                        # capturing and publishing for it, without touching a lamp.
+                        # Costs nothing unless the extension is enabled AND on.
+                        if (
+                            rgb_publisher is not None
+                            and control_state.rgb_on
+                            and display_on
+                            and control_state.mode != MODE_CUSTOM
+                        ):
+                            _publish_for_rgb_only(
+                                rgb_publisher,
+                                screen_capture_session,
+                                settings,
+                                control_state,
+                                ambience_near_ids,
+                                last_colors,
+                                display_on,
+                            )
                     elif not display_on:
                         just_entered = not display_off_active
                         if just_entered:
@@ -475,6 +495,48 @@ def main() -> int:
         sync_lock.release()
 
 
+
+
+def _publish_for_rgb_only(
+    publisher, session, settings, control_state, ambience_near_ids, last_colors, display_on
+) -> None:
+    """Capture and publish for the RGB extension while the lamps are switched off.
+
+    A cut-down version of the normal path: no availability sweep, no bulb
+    updates, no capture-fallback bookkeeping. If the capture fails for any
+    reason -- an inhibited compositor, an unplugged screen -- this tick is
+    simply skipped. The lamps are already off; there is nothing to protect and
+    nothing worth logging loudly about.
+    """
+
+    try:
+        capture_target = effective_capture_target(control_state, settings.screen_capture_target)
+        frame_raw, frame_width, frame_height = capture_raw_with_session(session, capture_target)
+        zone_samples = build_ambience_zone_samples(
+            frame_raw,
+            frame_width,
+            frame_height,
+            settings.sample_stride,
+            settings.color_boost,
+            settings.light_entities,
+            ambience_near_ids,
+            last_colors,
+        )
+    except Exception:  # noqa: BLE001 - the extension must never break the loop
+        LOGGER.debug("RGB-only capture skipped", exc_info=True)
+        return
+
+    screen_dark = bool(zone_samples) and all(
+        sample.should_turn_off(settings.dark_threshold, settings.dark_active_ratio_threshold)
+        for sample in zone_samples
+    )
+    _publish_rgb_frame(
+        publisher,
+        zone_samples,
+        screen_dark=screen_dark,
+        display_on=display_on,
+        control_state=control_state,
+    )
 
 
 def _publish_rgb_frame(publisher, zone_samples, *, screen_dark, display_on, control_state) -> None:

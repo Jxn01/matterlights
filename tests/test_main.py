@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import unittest
+from types import SimpleNamespace
 
 from matterlights.main import enforce_lights_off
 
@@ -113,3 +114,74 @@ class SyncLoopHandlerOrderTest(unittest.TestCase):
         self.assertEqual(
             checked, 1, "expected exactly one CaptureUnavailable handler in the sync loop"
         )
+
+
+class RgbPublishDuringMasterOffTest(unittest.TestCase):
+    """The RGB extension keeps receiving frames while the lamps are switched off.
+
+    The owner chose "the lamps' master switch does not silence the RGB". That is
+    not free: the sync loop takes a master-off branch that never reaches the
+    capture, so nothing would be published and the extension would go dark after
+    its staleness timeout. This asserts the branch publishes, and that it only
+    does so when the extension is actually wanted.
+    """
+
+    def _source(self) -> str:
+        import inspect
+
+        from matterlights import main as main_module
+
+        return inspect.getsource(main_module)
+
+    def test_the_master_off_branch_publishes_for_the_extension(self) -> None:
+        tree = ast.parse(self._source())
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_publish_for_rgb_only"
+        ]
+        self.assertEqual(len(calls), 1, "master-off should publish exactly once per tick")
+
+    def test_publishing_is_gated_on_the_extension_being_enabled_and_on(self) -> None:
+        """Otherwise a machine with no extension would capture for nobody."""
+
+        source = self._source()
+        start = source.index("if not control_state.lights_on:")
+        end = source.index("elif not display_on:", start)
+        branch = source[start:end]
+        self.assertIn("rgb_publisher is not None", branch)
+        self.assertIn("control_state.rgb_on", branch)
+        self.assertIn("display_on", branch)
+
+    def test_a_failed_capture_is_swallowed(self) -> None:
+        """The lamps are already off; a capture failure must not break the loop."""
+
+        from matterlights.main import _publish_for_rgb_only
+
+        class Exploding:
+            def grab(self, _target):
+                raise RuntimeError("compositor inhibited")
+
+        class Publisher:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def publish(self, *a, **k) -> bool:
+                self.calls += 1
+                return True
+
+        publisher = Publisher()
+        settings = SimpleNamespace(
+            screen_capture_target="primary",
+            sample_stride=121,
+            color_boost=1.5,
+            light_entities=["a"],
+            dark_threshold=12,
+            dark_active_ratio_threshold=0.05,
+        )
+        control = SimpleNamespace(capture_target=None, lights_on=False, rgb_on=True)
+
+        _publish_for_rgb_only(publisher, Exploding(), settings, control, ["a"], {}, True)
+        self.assertEqual(publisher.calls, 0, "nothing published, nothing raised")
