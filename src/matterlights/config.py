@@ -138,7 +138,7 @@ def _read_dotenv(path: Path) -> dict[str, str]:
 def _resolve_dotenv_path() -> Path:
     explicit_path = os.getenv("MATTERLIGHTS_ENV_FILE")
     if explicit_path:
-        return Path(explicit_path).expanduser()
+        return paths.expand_user(Path(explicit_path))
 
     cwd_path = Path.cwd() / ".env"
     if cwd_path.exists():
@@ -191,13 +191,13 @@ def _parse_log_path(value: str, base_dir: Path) -> Path | None:
     stripped = value.strip()
     if not stripped or stripped.lower() in _LOG_PATH_DISABLED:
         return None
-    return _resolve_path(Path(stripped).expanduser(), base_dir)
+    return _resolve_path(paths.expand_user(Path(stripped)), base_dir)
 
 
 def _parse_optional_path(value: str, base_dir: Path) -> Path | None:
     if not value.strip():
         return None
-    return _resolve_path(Path(value).expanduser(), base_dir)
+    return _resolve_path(paths.expand_user(Path(value)), base_dir)
 
 
 def _parse_light_zone_layout(value: str) -> list[str]:
