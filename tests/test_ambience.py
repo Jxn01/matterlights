@@ -4,11 +4,15 @@ import unittest
 
 from matterlights.ambience import (
     _apportion_slots,
+    _FAR_ZONE,
+    _NEAR_ZONE,
     build_ambience_zone_samples,
+    render_for_leds,
     resolve_near_entity_ids,
     sample_frame,
+    split_near_far_samples,
 )
-from matterlights.screen import RgbColor, ScreenZone
+from matterlights.screen import RgbColor, ScreenZone, ZoneSample
 
 
 ENTITIES = ["light.a", "light.b", "light.c", "light.d", "light.e", "light.f"]
@@ -188,3 +192,84 @@ class NearGroupResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RenderForLedsTest(unittest.TestCase):
+    """🚨 The regression guard for a rig that looked switched off for a day.
+
+    A bulb takes ``rgb_color`` and ``brightness`` as two separate arguments and
+    Home Assistant normalises the colour, so ``(24, 24, 23)`` at brightness 255
+    is emitted as a bright warm white. An addressable LED has no brightness
+    channel -- its brightness *is* the magnitude of its triple -- so publishing
+    the sampled colour handed the RGB extension a 9%-grey and the whole case
+    read as dead while the lamps beside it looked correct.
+    """
+
+    def _sample(self, colour, brightness=200, active_ratio=0.5):
+        return ZoneSample(
+            zone=ScreenZone("z", 0.0, 0.0, 1.0, 1.0),
+            color=RgbColor(*colour),
+            average_brightness=brightness,
+            active_ratio=active_ratio,
+        )
+
+    def _render(self, sample, floor=255):
+        return render_for_leds(
+            sample,
+            brightness_floor=floor,
+            dark_threshold=12,
+            dark_active_ratio_threshold=0.05,
+        )
+
+    def test_a_dim_neutral_sample_renders_at_full_brightness(self) -> None:
+        """The exact case that was reported: a dark terminal on this rig."""
+
+        self.assertEqual(self._render(self._sample((24, 24, 23))), RgbColor(255, 255, 244))
+
+    def test_hue_is_preserved_while_magnitude_is_raised(self) -> None:
+        rendered = self._render(self._sample((12, 6, 0)))
+        self.assertEqual(rendered, RgbColor(255, 128, 0))
+
+    def test_an_already_full_colour_is_unchanged(self) -> None:
+        self.assertEqual(self._render(self._sample((255, 0, 0))), RgbColor(255, 0, 0))
+
+    def test_a_lower_floor_scales_the_magnitude_down(self) -> None:
+        """With no floor the sample's own brightness sets the magnitude."""
+
+        rendered = self._render(self._sample((24, 24, 24), brightness=128), floor=0)
+        self.assertEqual(rendered, RgbColor(128, 128, 128))
+
+    def test_a_sample_the_bulbs_would_turn_off_renders_black(self) -> None:
+        dark = self._sample((2, 2, 2), brightness=3, active_ratio=0.0)
+        self.assertEqual(self._render(dark), RgbColor(0, 0, 0))
+
+    def test_pure_black_renders_black_rather_than_dividing_by_zero(self) -> None:
+        self.assertEqual(self._render(self._sample((0, 0, 0), brightness=200)), RgbColor(0, 0, 0))
+
+    def test_no_sample_renders_black(self) -> None:
+        self.assertEqual(self._render(None), RgbColor(0, 0, 0))
+
+    def test_it_never_leaves_the_channel_range(self) -> None:
+        for colour in ((1, 0, 0), (255, 254, 253), (3, 200, 7), (1, 1, 1)):
+            with self.subTest(colour=colour):
+                rendered = self._render(self._sample(colour))
+                for channel in (rendered.red, rendered.green, rendered.blue):
+                    self.assertGreaterEqual(channel, 0)
+                    self.assertLessEqual(channel, 255)
+
+
+class SplitNearFarSamplesTest(unittest.TestCase):
+    def _sample(self, zone, colour):
+        return ZoneSample(zone=zone, color=RgbColor(*colour), average_brightness=100, active_ratio=0.5)
+
+    def test_it_returns_one_sample_per_group(self) -> None:
+        near = self._sample(_NEAR_ZONE, (10, 0, 0))
+        far = self._sample(_FAR_ZONE, (0, 10, 0))
+        self.assertEqual(split_near_far_samples([near, far]), (near, far))
+
+    def test_one_empty_group_falls_back_to_the_other(self) -> None:
+        near = self._sample(_NEAR_ZONE, (10, 0, 0))
+        self.assertEqual(split_near_far_samples([near]), (near, near))
+
+    def test_no_samples_gives_no_samples(self) -> None:
+        self.assertEqual(split_near_far_samples([]), (None, None))

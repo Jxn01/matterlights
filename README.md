@@ -525,6 +525,18 @@ Enabled, two things change:
 * Each ambience frame is sent as one JSON datagram to that socket — near colour,
   far colour, brightness, active ratio, and MatterLights' own `screen_dark`,
   `display_on`, `lights_on` and `rgb_on` decisions.
+
+  ⚠️ **`near` and `far` are the colours the bulbs EMIT, not the colours sampled
+  off the screen.** Home Assistant takes `rgb_color` and `brightness` as two
+  separate arguments and normalises the colour, so a lamp fed `(24, 24, 23)` at
+  brightness 255 shows a bright warm white. Addressable RGB hardware has no
+  brightness channel — its brightness *is* the magnitude of the triple — so the
+  magnitude is folded in before publishing (`render_for_leds`), using the same
+  `BRIGHTNESS_FLOOR` and the same dark cutoff the bulbs get. Publishing the raw
+  sample instead looks fine on a bright screen and renders the whole rig black
+  on a dark one; that shipped once. `brightness` is the near sample's effective
+  brightness, carried for information — a consumer that applies it again will
+  double-count.
 * The dashboard grows an **RGB: On / Off** switch beside the lights switch,
   writing `rgbOn` into the same control file. One source of truth, so the two
   can never disagree.

@@ -5,7 +5,12 @@ from dataclasses import dataclass
 import logging
 import time
 
-from matterlights.ambience import build_ambience_zone_samples, resolve_near_entity_ids, split_near_far
+from matterlights.ambience import (
+    build_ambience_zone_samples,
+    render_for_leds,
+    resolve_near_entity_ids,
+    split_near_far_samples,
+)
 from matterlights import capture as _capture
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
@@ -414,6 +419,7 @@ def main() -> int:
                                 screen_dark=screen_dark,
                                 display_on=display_on,
                                 control_state=control_state,
+                                settings=settings,
                             )
 
                         preview_overrides = load_preview_overrides(settings.preview_override_file)
@@ -536,10 +542,13 @@ def _publish_for_rgb_only(
         screen_dark=screen_dark,
         display_on=display_on,
         control_state=control_state,
+        settings=settings,
     )
 
 
-def _publish_rgb_frame(publisher, zone_samples, *, screen_dark, display_on, control_state) -> None:
+def _publish_rgb_frame(
+    publisher, zone_samples, *, screen_dark, display_on, control_state, settings
+) -> None:
     """Hand this tick's colours to the local RGB extension.
 
     Deliberately passes matterlights' own DECISIONS (``screen_dark``,
@@ -548,17 +557,38 @@ def _publish_rgb_frame(publisher, zone_samples, *, screen_dark, display_on, cont
     it to obey the same verdicts instead of recomputing darkness from a palette
     and drifting.
 
+    ⚠️ ``near``/``far`` are the colours the bulbs **emit**, not the colours
+    sampled off the screen -- :func:`render_for_leds` folds brightness into the
+    triple, because the receiving hardware has no brightness channel of its own.
+    Publishing the sampled colour instead is the bug this signature exists to
+    prevent: it is not visibly wrong on a bright screen and renders the whole
+    rig black on a dark one.
+
     Never raises: the publisher swallows its own failures, and this adds no new
     ones. The lights must not go dark because an RGB listener did.
     """
 
-    near, far = split_near_far(zone_samples)
-    first = zone_samples[0] if zone_samples else None
+    near_sample, far_sample = split_near_far_samples(zone_samples)
+    near, far = (
+        render_for_leds(
+            sample,
+            brightness_floor=settings.brightness_floor,
+            dark_threshold=settings.dark_threshold,
+            dark_active_ratio_threshold=settings.dark_active_ratio_threshold,
+        )
+        for sample in (near_sample, far_sample)
+    )
     publisher.publish(
         (near.red, near.green, near.blue),
         (far.red, far.green, far.blue),
-        brightness=first.average_brightness if first is not None else 0,
-        active_ratio=first.active_ratio if first is not None else 0.0,
+        # The near group's own numbers, so a consumer reading `brightness`
+        # alongside `near` is reading one coherent sample rather than a mix.
+        brightness=(
+            near_sample.effective_brightness(settings.brightness_floor)
+            if near_sample is not None
+            else 0
+        ),
+        active_ratio=near_sample.active_ratio if near_sample is not None else 0.0,
         screen_dark=screen_dark,
         display_on=display_on,
         lights_on=control_state.lights_on,

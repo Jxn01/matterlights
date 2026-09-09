@@ -150,29 +150,69 @@ def build_ambience_zone_samples(
     ]
 
 
-def split_near_far(zone_samples: list[ZoneSample]) -> tuple[RgbColor, RgbColor]:
-    """One representative colour for each group, for consumers outside the bulbs.
+def split_near_far_samples(
+    zone_samples: list[ZoneSample],
+) -> tuple[ZoneSample | None, ZoneSample | None]:
+    """One representative sample for each group, for consumers outside the bulbs.
 
     The bulbs get a distinct colour per lamp -- ``_render_group_colors`` renders
-    as many as the group has members. A consumer that only wants "the near
-    colour" and "the far colour" (the RGB extension) needs a single pair, so
-    this takes the first sample of each group.
+    as many as the group has members. A consumer that only wants "the near one"
+    and "the far one" (the RGB extension) needs a single pair, so this takes the
+    first sample of each group.
 
-    Falls back to the other group when one is empty, and to black when there are
-    no samples at all, so a caller never has to special-case an odd
+    Falls back to the other group when one is empty, and to ``None`` when there
+    are no samples at all, so a caller never has to special-case an odd
     configuration such as every light being marked near.
+
+    Returns the *samples*, not their colours: a sample's colour alone is not what
+    the room sees -- see :func:`render_for_leds`.
     """
 
-    near = [sample.color for sample in zone_samples if sample.zone is _NEAR_ZONE]
-    far = [sample.color for sample in zone_samples if sample.zone is _FAR_ZONE]
+    near = [sample for sample in zone_samples if sample.zone is _NEAR_ZONE]
+    far = [sample for sample in zone_samples if sample.zone is _FAR_ZONE]
     if not near and not far:
-        black = RgbColor(0, 0, 0)
-        return black, black
+        return None, None
     if not near:
         return far[0], far[0]
     if not far:
         return near[0], near[0]
     return near[0], far[0]
+
+
+def render_for_leds(
+    sample: ZoneSample | None,
+    *,
+    brightness_floor: int,
+    dark_threshold: int,
+    dark_active_ratio_threshold: float,
+) -> RgbColor:
+    """What a bulb fed this sample actually emits, as a single RGB triple.
+
+    🚨 **A sample's colour is not what the bulb shows, and the difference is the
+    whole ball game for an LED.** Home Assistant takes ``rgb_color`` and
+    ``brightness`` as separate arguments and normalises the colour, so a bulb
+    given ``(24, 24, 23)`` at brightness 255 emits a bright warm white -- not a
+    9%-grey glow. An addressable LED has no brightness channel: its brightness
+    *is* the magnitude of its triple. So the magnitude has to be baked in here,
+    or a rig mirroring the bulbs renders visually black on every screen that is
+    not already blinding, while the bulbs beside it look correct.
+
+    Uses the same off-predicate, the same floor and the same thresholds as
+    ``_build_desired_states`` does for the bulbs, so the two cannot disagree
+    about what this frame looks like.
+    """
+
+    if sample is None or sample.should_turn_off(dark_threshold, dark_active_ratio_threshold):
+        return RgbColor(0, 0, 0)
+    peak = sample.color.max_channel()
+    if peak == 0:
+        return RgbColor(0, 0, 0)
+    scale = sample.effective_brightness(brightness_floor) / peak
+    return RgbColor(
+        red=_clamp_channel(sample.color.red * scale),
+        green=_clamp_channel(sample.color.green * scale),
+        blue=_clamp_channel(sample.color.blue * scale),
+    )
 
 
 def sample_frame(raw: bytes, width: int, height: int, sample_stride: int) -> AmbienceFrame:

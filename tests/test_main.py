@@ -185,3 +185,82 @@ class RgbPublishDuringMasterOffTest(unittest.TestCase):
 
         _publish_for_rgb_only(publisher, Exploding(), settings, control, ["a"], {}, True)
         self.assertEqual(publisher.calls, 0, "nothing published, nothing raised")
+
+
+class PublishRgbFrameTest(unittest.TestCase):
+    """🚨 What reaches the RGB extension must be what the BULBS EMIT.
+
+    Publishing the sampled colour instead is not visibly wrong on a bright
+    screen and renders the whole rig black on a dark one, because the receiving
+    hardware has no brightness channel to apply separately. That shipped, and
+    the case looked switched off for a day while the lamps looked correct.
+    """
+
+    def _samples(self, near_colour, far_colour, brightness=200, active_ratio=0.5):
+        from matterlights.ambience import _FAR_ZONE, _NEAR_ZONE
+        from matterlights.screen import RgbColor, ZoneSample
+
+        return [
+            ZoneSample(zone=_NEAR_ZONE, color=RgbColor(*near_colour),
+                       average_brightness=brightness, active_ratio=active_ratio),
+            ZoneSample(zone=_FAR_ZONE, color=RgbColor(*far_colour),
+                       average_brightness=brightness, active_ratio=active_ratio),
+        ]
+
+    def _publish(self, zone_samples, brightness_floor=255, **overrides):
+        from matterlights.main import _publish_rgb_frame
+
+        published: dict = {}
+
+        class Publisher:
+            def publish(self, near, far, **kwargs):
+                published.update(near=near, far=far, **kwargs)
+
+        settings = SimpleNamespace(
+            brightness_floor=brightness_floor,
+            dark_threshold=12,
+            dark_active_ratio_threshold=0.05,
+        )
+        _publish_rgb_frame(
+            Publisher(),
+            zone_samples,
+            screen_dark=overrides.get("screen_dark", False),
+            display_on=overrides.get("display_on", True),
+            control_state=SimpleNamespace(lights_on=True, rgb_on=True),
+            settings=settings,
+        )
+        return published
+
+    def test_a_dim_sample_is_published_at_full_magnitude(self) -> None:
+        published = self._publish(self._samples((24, 24, 23), (24, 24, 23)))
+        self.assertEqual(published["near"], (255, 255, 244))
+        self.assertEqual(published["far"], (255, 255, 244))
+
+    def test_it_does_not_publish_the_raw_sample(self) -> None:
+        published = self._publish(self._samples((12, 6, 0), (12, 6, 0)))
+        self.assertNotEqual(published["near"], (12, 6, 0), "raw sample must not reach the LEDs")
+        self.assertEqual(published["near"], (255, 128, 0))
+
+    def test_near_and_far_stay_distinct(self) -> None:
+        published = self._publish(self._samples((255, 0, 0), (0, 0, 255)))
+        self.assertEqual(published["near"], (255, 0, 0))
+        self.assertEqual(published["far"], (0, 0, 255))
+
+    def test_a_frame_the_bulbs_would_turn_off_publishes_black(self) -> None:
+        published = self._publish(self._samples((2, 2, 2), (2, 2, 2), brightness=3, active_ratio=0.0))
+        self.assertEqual(published["near"], (0, 0, 0))
+        self.assertEqual(published["far"], (0, 0, 0))
+
+    def test_no_samples_publishes_black_without_raising(self) -> None:
+        published = self._publish([])
+        self.assertEqual(published["near"], (0, 0, 0))
+        self.assertEqual(published["brightness"], 0)
+
+    def test_the_verdicts_are_passed_through_untouched(self) -> None:
+        published = self._publish(
+            self._samples((255, 0, 0), (255, 0, 0)), screen_dark=True, display_on=False
+        )
+        self.assertIs(published["screen_dark"], True)
+        self.assertIs(published["display_on"], False)
+        self.assertIs(published["lights_on"], True)
+        self.assertIs(published["rgb_on"], True)
