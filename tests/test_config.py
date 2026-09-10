@@ -35,6 +35,31 @@ class LoadSettingsTests(unittest.TestCase):
             self.assertEqual(settings.preview_override_file, base_dir / "config" / "preview.json")
             self.assertEqual(settings.log_path, base_dir / "logs" / "matterlights.log")
 
+    def _settings_with(self, *lines: str):
+        with TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env"
+            env_path.write_text(
+                "\n".join(["HA_TOKEN=test-token", "HA_LIGHT_ENTITIES=light.one", *lines]),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"MATTERLIGHTS_ENV_FILE": str(env_path)}, clear=False):
+                return load_settings(), Path(temp_dir)
+
+    def test_rgb_publish_socket_accepts_udp_for_windows(self) -> None:
+        from matterlights.rgb_target import UdpTarget
+
+        settings, _ = self._settings_with("RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731")
+        self.assertEqual(settings.rgb_publish_socket, UdpTarget("127.0.0.1", 45731))
+
+    def test_a_malformed_udp_target_is_refused_when_settings_load(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            self._settings_with("RGB_PUBLISH_SOCKET=udp://127.0.0.1")
+        self.assertIn("udp://127.0.0.1:45731", str(caught.exception))
+
+    def test_a_plain_rgb_socket_path_still_resolves_from_the_env_file(self) -> None:
+        settings, base_dir = self._settings_with("RGB_PUBLISH_SOCKET=run/rgb.sock")
+        self.assertEqual(settings.rgb_publish_socket, base_dir / "run" / "rgb.sock")
+
     def test_control_state_and_display_sleep_defaults(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)

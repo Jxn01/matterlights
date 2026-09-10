@@ -5,6 +5,11 @@ exists to prove one thing: whatever goes wrong on the socket, ``publish``
 returns and the caller carries on. A regression that lets an exception escape
 would take the bulbs down whenever the extension was stopped -- which is the
 normal state on every machine except one.
+
+Two transports carry the same payload. A unix datagram socket on Linux; UDP on
+the loopback where there is no such thing -- Windows, whose ``AF_UNIX`` is
+``SOCK_STREAM`` only. The unix tests skip on Windows; everything else runs on
+both, so the Windows path is exercised from Linux on every run.
 """
 
 from __future__ import annotations
@@ -17,11 +22,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-if sys.platform == "win32":  # pragma: no cover - unix sockets
-    raise unittest.SkipTest("unix datagram sockets")
-
+import matterlights.rgb_publish as rgb_publish
 from matterlights.rgb_publish import PAYLOAD_VERSION, AmbiencePublisher
+from matterlights.rgb_target import UdpTarget
+
+HAS_UNIX_DATAGRAMS = hasattr(socket, "AF_UNIX") and sys.platform != "win32"
 
 FRAME = dict(
     brightness=42,
@@ -34,7 +41,7 @@ FRAME = dict(
 
 
 class _Listener:
-    """A bound datagram socket standing in for the extension."""
+    """A bound unix datagram socket standing in for the extension."""
 
     def __init__(self, path: Path) -> None:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -48,6 +55,32 @@ class _Listener:
         self.sock.close()
 
 
+class _UdpListener:
+    """The extension as it listens on Windows: UDP on the loopback."""
+
+    def __init__(self) -> None:
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.settimeout(2.0)
+        self.port = self.sock.getsockname()[1]
+        self.url = f"udp://127.0.0.1:{self.port}"
+
+    def receive(self) -> dict:
+        return json.loads(self.sock.recv(65535).decode("utf-8"))
+
+    def close(self) -> None:
+        self.sock.close()
+
+
+def _closed_udp_port() -> int:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    return port
+
+
+@unittest.skipUnless(HAS_UNIX_DATAGRAMS, "unix datagram sockets")
 class PublisherTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -100,6 +133,15 @@ class PublisherTest(unittest.TestCase):
             },
         )
 
+    def test_a_string_path_is_a_unix_socket_too(self) -> None:
+        # RGB_PUBLISH_SOCKET arrives as text; a plain path must still mean unix.
+        listener = _Listener(self.path)
+        self.addCleanup(listener.close)
+        publisher = AmbiencePublisher(str(self.path))
+        self.addCleanup(publisher.close)
+        self.assertTrue(publisher.publish((1, 2, 3), (4, 5, 6), **FRAME))
+        self.assertEqual(listener.receive()["near"], [1, 2, 3])
+
     def test_no_listener_is_not_an_error(self) -> None:
         """The normal state whenever the extension is not running."""
 
@@ -140,6 +182,8 @@ class PublisherTest(unittest.TestCase):
         # Whatever happened, nothing raised and we got here.
 
     def test_recovery_is_reported(self) -> None:
+        # Over a unix socket one clean send is proof of a listener: with none,
+        # the send itself fails.
         publisher = AmbiencePublisher(self.path)
         self.addCleanup(publisher.close)
         self.assertFalse(publisher.publish((1, 2, 3), (4, 5, 6), **FRAME))
@@ -164,6 +208,145 @@ class PublisherTest(unittest.TestCase):
         self.assertFalse(publisher.publish((1, 2, 3), (4, 5, 6), **FRAME))
 
 
+class UdpPublisherTest(unittest.TestCase):
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    def test_a_udp_listener_receives_the_frame(self) -> None:
+        listener = _UdpListener()
+        self.addCleanup(listener.close)
+        publisher = AmbiencePublisher(listener.url)
+        self.addCleanup(publisher.close)
+
+        self.assertTrue(publisher.publish((1, 2, 3), (4, 5, 6), **FRAME))
+        payload = listener.receive()
+        self.assertEqual(payload["v"], PAYLOAD_VERSION)
+        self.assertEqual(payload["near"], [1, 2, 3])
+        self.assertEqual(payload["far"], [4, 5, 6])
+
+    def test_a_target_object_works_as_well_as_a_url(self) -> None:
+        listener = _UdpListener()
+        self.addCleanup(listener.close)
+        publisher = AmbiencePublisher(UdpTarget("127.0.0.1", listener.port))
+        self.addCleanup(publisher.close)
+        self.assertTrue(publisher.publish((7, 8, 9), (0, 0, 0), **FRAME))
+        self.assertEqual(listener.receive()["near"], [7, 8, 9])
+
+    def test_no_listener_is_not_an_error(self) -> None:
+        publisher = AmbiencePublisher(f"udp://127.0.0.1:{_closed_udp_port()}")
+        self.addCleanup(publisher.close)
+        for _ in range(5):
+            publisher.publish((1, 2, 3), (4, 5, 6), **FRAME)
+
+    @unittest.skipUnless(HAS_UNIX_DATAGRAMS, "unix datagram sockets")
+    def test_both_transports_carry_the_identical_payload(self) -> None:
+        """One wire format. The extension must not be able to tell them apart."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rgb.sock"
+            unix_listener = _Listener(path)
+            self.addCleanup(unix_listener.close)
+            udp_listener = _UdpListener()
+            self.addCleanup(udp_listener.close)
+            frame = dict(FRAME, palette=[((255, 0, 0), 0.6), ((0, 0, 255), 0.4)])
+            for target in (path, udp_listener.url):
+                publisher = AmbiencePublisher(target)
+                publisher.publish((1, 2, 3), (4, 5, 6), **frame)
+                publisher.close()
+            self.assertEqual(unix_listener.receive(), udp_listener.receive())
+
+
+class _ScriptedSocket:
+    """A socket whose sends succeed or raise, in the order given."""
+
+    def __init__(self, outcomes: list) -> None:
+        self.outcomes = list(outcomes)
+        self.closed = False
+
+    def setblocking(self, _flag) -> None:
+        pass
+
+    def sendto(self, data, _address):
+        outcome = self.outcomes.pop(0) if self.outcomes else None
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return len(data)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _reset() -> ConnectionResetError:
+    return ConnectionResetError(10054, "An existing connection was forcibly closed by the remote host")
+
+
+class WindowsConnectionResetTest(unittest.TestCase):
+    """🚨 Windows reports a UDP send to a closed port on the NEXT send.
+
+    The closed port answers with an ICMP port-unreachable, and Winsock hands that
+    to the socket's following ``sendto`` as ``WSAECONNRESET`` --
+    ``ConnectionResetError``. Microsoft's documentation says the socket is then
+    no longer usable. So the publisher drops it and makes a new one next tick,
+    never raises, and does not let the resulting rhythm -- sent, reset, sent,
+    reset, while the extension is stopped -- flap the log between a warning and
+    a recovery twice a second.
+    """
+
+    TARGET = "udp://127.0.0.1:9"
+
+    def _publish(self, publisher: AmbiencePublisher) -> bool:
+        return publisher.publish((1, 2, 3), (4, 5, 6), **FRAME)
+
+    def test_a_reset_drops_the_socket_and_the_next_publish_makes_a_new_one(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+        publisher = AmbiencePublisher(self.TARGET)
+        self.addCleanup(publisher.close)
+        dead = _ScriptedSocket([_reset()])
+        publisher._socket = dead
+        self.assertFalse(self._publish(publisher))
+        self.assertTrue(dead.closed)
+        fresh = _ScriptedSocket([])
+        with mock.patch.object(rgb_publish.socket, "socket", lambda *_a, **_k: fresh):
+            self.assertTrue(self._publish(publisher))
+        self.assertIs(publisher._socket, fresh)
+
+    def test_the_windows_rhythm_warns_once_and_never_claims_recovery(self) -> None:
+        made: list[_ScriptedSocket] = []
+
+        def factory(*_args, **_kwargs):
+            made.append(_ScriptedSocket([None, _reset()]))
+            return made[-1]
+
+        publisher = AmbiencePublisher(self.TARGET)
+        self.addCleanup(publisher.close)
+        with mock.patch.object(rgb_publish.socket, "socket", factory), self.assertLogs(
+            "matterlights.rgb_publish", level="INFO"
+        ) as logs:
+            for _ in range(20):
+                self._publish(publisher)
+        warnings = [record for record in logs.records if record.levelno == logging.WARNING]
+        self.assertEqual(len(warnings), 1, [record.getMessage() for record in logs.records])
+        self.assertFalse(any("receiving again" in record.getMessage() for record in logs.records))
+        self.assertGreater(len(made), 5, "each reset must cost the socket")
+
+    def test_two_clean_sends_in_a_row_are_proof_of_a_listener(self) -> None:
+        sockets = iter([_ScriptedSocket([_reset()]), _ScriptedSocket([])])
+        publisher = AmbiencePublisher(self.TARGET)
+        self.addCleanup(publisher.close)
+        with mock.patch.object(rgb_publish.socket, "socket", lambda *_a, **_k: next(sockets)), self.assertLogs(
+            "matterlights.rgb_publish", level="INFO"
+        ) as logs:
+            self.assertFalse(self._publish(publisher))
+            self._publish(publisher)
+            self.assertTrue(publisher._warned, "one clean UDP send proves nothing")
+            self._publish(publisher)
+        self.assertFalse(publisher._warned)
+        recoveries = [r for r in logs.records if "receiving again" in r.getMessage()]
+        self.assertEqual(len(recoveries), 1)
+
+
 class NeverRaisesTest(unittest.TestCase):
     """Whatever the socket layer throws, publish returns."""
 
@@ -185,19 +368,30 @@ class NeverRaisesTest(unittest.TestCase):
         self.assertFalse(publisher.publish((1, 2, 3), (4, 5, 6), **FRAME))
 
     def test_socket_creation_failure_is_swallowed(self) -> None:
-        import matterlights.rgb_publish as module
+        for target in (Path("/tmp/whatever.sock"), "udp://127.0.0.1:9"):
+            with self.subTest(target=str(target)):
+                with mock.patch.object(
+                    rgb_publish.socket, "socket", mock.Mock(side_effect=OSError("no fds"))
+                ):
+                    publisher = AmbiencePublisher(target)
+                    self.assertFalse(publisher.publish((1, 2, 3), (4, 5, 6), **FRAME))
 
-        original = module.socket.socket
-        module.socket.socket = lambda *a, **k: (_ for _ in ()).throw(OSError("no fds"))
-        try:
-            publisher = AmbiencePublisher(Path("/tmp/whatever.sock"))
-            self.assertFalse(publisher.publish((1, 2, 3), (4, 5, 6), **FRAME))
-        finally:
-            module.socket.socket = original
+    def test_no_unix_sockets_at_all_is_a_warning_not_a_crash(self) -> None:
+        """🚨 ``socket.AF_UNIX`` does not exist on Windows CPython.
 
+        Looking it up raised ``AttributeError``, which the ``OSError`` handler
+        around it did not catch -- so a unix path in ``RGB_PUBLISH_SOCKET`` on
+        Windows took the whole sync loop down at its first publish. Latent only
+        because the extension defaults to off.
+        """
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
+        logging.disable(logging.NOTSET)
+        with mock.patch.dict(socket.__dict__):
+            socket.__dict__.pop("AF_UNIX", None)
+            with self.assertLogs("matterlights.rgb_publish", level="WARNING") as logs:
+                publisher = AmbiencePublisher(Path("/tmp/rgb.sock"))
+                self.assertFalse(publisher.publish((1, 2, 3), (4, 5, 6), **FRAME))
+        self.assertIn("udp://", "\n".join(logs.output), "say what to use instead")
 
 
 class PaletteTest(unittest.TestCase):
@@ -207,17 +401,14 @@ class PaletteTest(unittest.TestCase):
     collapsed to a single near/far pair before it ever reached the socket. A
     97-LED strip can render the whole thing as a gradient, which is the
     difference between "the case is blue" and an ambience with depth.
+
+    Over UDP, so this runs on both platforms.
     """
 
-    def setUp(self) -> None:
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.path = Path(self.directory.name) / "rgb.sock"
-
     def _round_trip(self, **kwargs):
-        listener = _Listener(self.path)
+        listener = _UdpListener()
         self.addCleanup(listener.close)
-        publisher = AmbiencePublisher(self.path)
+        publisher = AmbiencePublisher(listener.url)
         self.addCleanup(publisher.close)
         publisher.publish((1, 2, 3), (4, 5, 6), **{**FRAME, **kwargs})
         return listener.receive()
@@ -247,3 +438,7 @@ class PaletteTest(unittest.TestCase):
     def test_the_version_says_v2(self) -> None:
         self.assertEqual(self._round_trip()["v"], PAYLOAD_VERSION)
         self.assertEqual(PAYLOAD_VERSION, 2)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

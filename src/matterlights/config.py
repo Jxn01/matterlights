@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 
 from matterlights import paths
+from matterlights.rgb_target import UdpTarget, is_udp, parse_rgb_target
 
 
 @dataclass(slots=True)
@@ -22,7 +23,9 @@ class Settings:
     # nothing is published, the dashboard hides its RGB control entirely, and
     # this program behaves exactly as it did before the extension existed.
     rgb_extension_enabled: bool = False
-    rgb_publish_socket: Path | None = None
+    # A unix socket path on Linux; udp://127.0.0.1:PORT on Windows, which has no
+    # unix datagram sockets. See matterlights.rgb_target.
+    rgb_publish_socket: Path | UdpTarget | None = None
     # Home Assistant fallback: the sync loop refreshes this entity, and an HA
     # automation turns the lights off when it goes stale. Covers the cases
     # Windows never reports -- crash, hard reset, power cut. Empty disables it.
@@ -108,9 +111,7 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         respect_display_sleep=_parse_bool(get_value("RESPECT_DISPLAY_SLEEP", "true")),
         turn_off_on_shutdown=_parse_bool(get_value("TURN_OFF_ON_SHUTDOWN", "true")),
         rgb_extension_enabled=_parse_bool(get_value("RGB_EXTENSION_ENABLED", "false")),
-        rgb_publish_socket=_parse_optional_path(
-            get_value("RGB_PUBLISH_SOCKET", ""), path_base_dir
-        ),
+        rgb_publish_socket=_parse_rgb_target(get_value("RGB_PUBLISH_SOCKET", ""), path_base_dir),
         heartbeat_entity_id=get_value("HEARTBEAT_ENTITY_ID", "sensor.matterlights_heartbeat").strip(),
         heartbeat_interval_seconds=float(get_value("HEARTBEAT_INTERVAL_SECONDS", "30.0")),
         color_sync_mode=get_value("COLOR_SYNC_MODE", "zoned").strip().lower(),
@@ -216,6 +217,19 @@ def _parse_log_path(value: str, base_dir: Path) -> Path | None:
     if not stripped or stripped.lower() in _LOG_PATH_DISABLED:
         return None
     return _resolve_path(paths.expand_user(Path(stripped)), base_dir)
+
+
+def _parse_rgb_target(value: str, base_dir: Path) -> Path | UdpTarget | None:
+    """``RGB_PUBLISH_SOCKET``: ``udp://HOST:PORT``, or a path like any other.
+
+    A path resolves from the ``.env`` directory like every other path setting.
+    A malformed URL raises here, at load, where the message reaches a person --
+    not at the first publish, where it would be one swallowed warning.
+    """
+
+    if is_udp(value):
+        return parse_rgb_target(value)
+    return _parse_optional_path(value, base_dir)
 
 
 def _parse_optional_path(value: str, base_dir: Path) -> Path | None:

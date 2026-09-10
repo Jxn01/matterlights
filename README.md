@@ -504,12 +504,12 @@ Example perimeter layout:
 LIGHT_ZONE_LAYOUT=top-left,top-center,top-right,bottom-right,bottom-center,bottom-left
 ```
 
-## Optional: local RGB extension (Linux)
+## Optional: local RGB extension
 
 MatterLights can hand each tick's ambience colours to a separate program that
 drives RGB hardware on the same machine — motherboard headers, RAM, GPU, an AIO
 pump — so the case matches the lamps. The companion project is
-[`ambience-rgb`](https://github.com/Jxn01/ambience-rgb).
+[`ambience-rgb`](https://github.com/Jxn01/ambience-rgb), on Linux and Windows.
 
 **Off by default and inert when off.** With `RGB_EXTENSION_ENABLED=false` nothing
 is published, no socket is opened, the publisher module is never even imported,
@@ -517,8 +517,24 @@ and the dashboard renders no RGB control.
 
 ```ini
 RGB_EXTENSION_ENABLED=true
+# Linux: the extension's unix datagram socket
 RGB_PUBLISH_SOCKET=/run/user/1000/ambience-rgb.sock
+# Windows: UDP on the loopback, since Windows has no unix datagram sockets
+# RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731
 ```
+
+`ambience-rgb devices` prints the exact value to paste. A plain path is a unix
+datagram socket, resolved from the `.env` directory like every other path;
+`udp://HOST:PORT` is UDP, and a malformed one is refused when the settings load.
+Both carry the same payload and both are fire-and-forget.
+
+⚠️ **On Windows a UDP send to a closed port fails on the *next* send.** The
+closed port answers with an ICMP port-unreachable, and Winsock reports it to the
+socket's following `sendto` as `WSAECONNRESET`, after which Microsoft calls the
+socket unusable. So the publisher replaces its socket on the next tick, warns
+once, and says the listener is back only after **two** clean sends in a row —
+over UDP a single clean send proves nothing, and a stopped extension would
+otherwise flap the log between a warning and a recovery twice a second.
 
 ⚠️ **`SYNC_INTERVAL_SECONDS` is the ceiling for the RGB extension too**, since it
 only ever sees what this loop publishes. Raising the extension's own `usb_hz`
