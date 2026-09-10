@@ -540,6 +540,15 @@ Enabled, two things change:
   far colour, brightness, active ratio, and MatterLights' own `screen_dark`,
   `display_on`, `lights_on` and `rgb_on` decisions.
 
+  Since **payload version 2** it also carries `palette`: the frame's whole
+  weighted colour palette, richest first, as `{"rgb": [r,g,b], "weight": f}`.
+  Six bulbs can only show one colour each, so the engine's four-colour palette
+  was being collapsed to a single near/far pair before it reached the socket. A
+  consumer with a 97-LED strip can render the whole thing as a gradient instead.
+  The list is always present, empty when the mode produces no palette, so a
+  consumer never has to tell absent from empty. `near` and `far` are unchanged
+  and still published alongside.
+
   ⚠️ **`near` and `far` are the colours the bulbs EMIT, not the colours sampled
   off the screen.** Home Assistant takes `rgb_color` and `brightness` as two
   separate arguments and normalises the colour, so a lamp fed `(24, 24, 23)` at

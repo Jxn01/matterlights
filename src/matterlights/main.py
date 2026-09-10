@@ -6,6 +6,7 @@ import logging
 import time
 
 from matterlights.ambience import (
+    build_ambience,
     build_ambience_zone_samples,
     render_for_leds,
     resolve_near_entity_ids,
@@ -371,8 +372,13 @@ def main() -> int:
                                 screen_capture_session, settings.screen_capture_target
                             )
 
+                        # Bound before the branch, not inside it: the publish
+                        # below is outside, and only the ambience path produces a
+                        # palette. Assigning it only in that branch leaves the
+                        # name unbound for every other colour_sync_mode.
+                        ambience_frame = None
                         if settings.color_sync_mode == "ambience":
-                            zone_samples = build_ambience_zone_samples(
+                            zone_samples, ambience_frame = build_ambience(
                                 frame_raw,
                                 frame_width,
                                 frame_height,
@@ -420,6 +426,7 @@ def main() -> int:
                                 display_on=display_on,
                                 control_state=control_state,
                                 settings=settings,
+                                frame=ambience_frame,
                             )
 
                         preview_overrides = load_preview_overrides(settings.preview_override_file)
@@ -518,7 +525,7 @@ def _publish_for_rgb_only(
     try:
         capture_target = effective_capture_target(control_state, settings.screen_capture_target)
         frame_raw, frame_width, frame_height = capture_raw_with_session(session, capture_target)
-        zone_samples = build_ambience_zone_samples(
+        zone_samples, ambience_frame = build_ambience(
             frame_raw,
             frame_width,
             frame_height,
@@ -543,11 +550,12 @@ def _publish_for_rgb_only(
         display_on=display_on,
         control_state=control_state,
         settings=settings,
+        frame=ambience_frame,
     )
 
 
 def _publish_rgb_frame(
-    publisher, zone_samples, *, screen_dark, display_on, control_state, settings
+    publisher, zone_samples, *, screen_dark, display_on, control_state, settings, frame=None
 ) -> None:
     """Hand this tick's colours to the local RGB extension.
 
@@ -578,9 +586,16 @@ def _publish_rgb_frame(
         )
         for sample in (near_sample, far_sample)
     )
+    # Boosted the same way the bulbs' colours are, so both consumers work in
+    # one colour space rather than each inventing its own.
+    palette = [
+        ((entry.color.red, entry.color.green, entry.color.blue), entry.weight)
+        for entry in (frame.palette if frame is not None else ())
+    ]
     publisher.publish(
         (near.red, near.green, near.blue),
         (far.red, far.green, far.blue),
+        palette=palette,
         # The near group's own numbers, so a consumer reading `brightness`
         # alongside `near` is reading one coherent sample rather than a mix.
         brightness=(

@@ -264,3 +264,66 @@ class PublishRgbFrameTest(unittest.TestCase):
         self.assertIs(published["display_on"], False)
         self.assertIs(published["lights_on"], True)
         self.assertIs(published["rgb_on"], True)
+
+
+class PalettePublishTest(unittest.TestCase):
+    """The palette must reach the wire, and its absence must not break anything.
+
+    ⚠️ `ambience_frame` is bound before the mode branch on purpose. The publish
+    call sits *outside* that branch, so assigning it only in the ambience arm
+    leaves the name unbound for every other colour_sync_mode -- a NameError on
+    the first frame, in a path the ambience tests never touch.
+    """
+
+    def _publish(self, frame):
+        from matterlights.main import _publish_rgb_frame
+        from matterlights.ambience import _FAR_ZONE, _NEAR_ZONE
+        from matterlights.screen import RgbColor, ZoneSample
+
+        published: dict = {}
+
+        class Publisher:
+            def publish(self, near, far, **kwargs):
+                published.update(near=near, far=far, **kwargs)
+
+        samples = [
+            ZoneSample(zone=_NEAR_ZONE, color=RgbColor(255, 0, 0),
+                       average_brightness=200, active_ratio=0.5),
+            ZoneSample(zone=_FAR_ZONE, color=RgbColor(0, 0, 255),
+                       average_brightness=200, active_ratio=0.5),
+        ]
+        _publish_rgb_frame(
+            Publisher(), samples, screen_dark=False, display_on=True,
+            control_state=SimpleNamespace(lights_on=True, rgb_on=True),
+            settings=SimpleNamespace(brightness_floor=255, dark_threshold=12,
+                                     dark_active_ratio_threshold=0.05),
+            frame=frame,
+        )
+        return published
+
+    def test_no_frame_publishes_an_empty_palette_without_raising(self) -> None:
+        """Every non-ambience mode takes this path."""
+
+        self.assertEqual(self._publish(None)["palette"], [])
+
+    def test_a_frame_publishes_its_palette_in_order(self) -> None:
+        from matterlights.ambience import AmbienceFrame, PaletteColor
+        from matterlights.screen import RgbColor
+
+        frame = AmbienceFrame(
+            palette=(
+                PaletteColor(RgbColor(255, 0, 0), 0.6),
+                PaletteColor(RgbColor(0, 0, 255), 0.4),
+            ),
+            mix=RgbColor(128, 0, 128), average_brightness=200, active_ratio=0.5,
+        )
+        palette = self._publish(frame)["palette"]
+        self.assertEqual([c for c, _w in palette], [(255, 0, 0), (0, 0, 255)])
+        self.assertEqual([w for _c, w in palette], [0.6, 0.4])
+
+    def test_near_and_far_are_still_published_alongside(self) -> None:
+        """v2 adds the palette; it does not replace the pair."""
+
+        published = self._publish(None)
+        self.assertEqual(published["near"], (255, 0, 0))
+        self.assertEqual(published["far"], (0, 0, 255))

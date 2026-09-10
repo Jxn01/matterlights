@@ -28,7 +28,7 @@ LOGGER = logging.getLogger("matterlights.rgb_publish")
 
 # Bumped when the payload's meaning changes, so a mismatched extension can say
 # so plainly instead of misreading fields.
-PAYLOAD_VERSION = 1
+PAYLOAD_VERSION = 2
 
 
 class AmbiencePublisher:
@@ -70,6 +70,7 @@ class AmbiencePublisher:
         near: tuple[int, int, int],
         far: tuple[int, int, int],
         *,
+        palette: list[tuple[tuple[int, int, int], float]] | None = None,
         brightness: int,
         active_ratio: float,
         screen_dark: bool,
@@ -87,6 +88,13 @@ class AmbiencePublisher:
             "v": PAYLOAD_VERSION,
             "near": list(near),
             "far": list(far),
+            # The frame's whole weighted palette, richest first. Six bulbs can
+            # only show one colour each; a 97-LED strip can show a gradient, and
+            # this is the difference between the two.
+            "palette": [
+                {"rgb": list(colour), "weight": round(float(weight), 4)}
+                for colour, weight in (palette or [])
+            ],
             "brightness": int(brightness),
             "active_ratio": round(float(active_ratio), 4),
             "screen_dark": bool(screen_dark),

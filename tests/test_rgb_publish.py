@@ -90,6 +90,7 @@ class PublisherTest(unittest.TestCase):
                 "v",
                 "near",
                 "far",
+                "palette",
                 "brightness",
                 "active_ratio",
                 "screen_dark",
@@ -197,3 +198,52 @@ class NeverRaisesTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class PaletteTest(unittest.TestCase):
+    """The palette is the whole point of payload v2.
+
+    Six bulbs can show one colour each, so the engine's four-colour palette was
+    collapsed to a single near/far pair before it ever reached the socket. A
+    97-LED strip can render the whole thing as a gradient, which is the
+    difference between "the case is blue" and an ambience with depth.
+    """
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "rgb.sock"
+
+    def _round_trip(self, **kwargs):
+        listener = _Listener(self.path)
+        self.addCleanup(listener.close)
+        publisher = AmbiencePublisher(self.path)
+        self.addCleanup(publisher.close)
+        publisher.publish((1, 2, 3), (4, 5, 6), **{**FRAME, **kwargs})
+        return listener.receive()
+
+    def test_it_carries_colours_and_weights(self) -> None:
+        payload = self._round_trip(
+            palette=[((255, 0, 0), 0.5), ((0, 0, 255), 0.3), ((0, 255, 0), 0.2)]
+        )
+        self.assertEqual([entry["rgb"] for entry in payload["palette"]],
+                         [[255, 0, 0], [0, 0, 255], [0, 255, 0]])
+        self.assertEqual([entry["weight"] for entry in payload["palette"]], [0.5, 0.3, 0.2])
+
+    def test_order_is_preserved(self) -> None:
+        """Richest first: a consumer apportioning LED spans relies on it."""
+
+        payload = self._round_trip(
+            palette=[((9, 9, 9), 0.9), ((1, 1, 1), 0.1)]
+        )
+        self.assertEqual(payload["palette"][0]["weight"], 0.9)
+
+    def test_no_palette_is_an_empty_list_not_a_missing_key(self) -> None:
+        """A consumer must never have to distinguish absent from empty."""
+
+        payload = self._round_trip(palette=None)
+        self.assertEqual(payload["palette"], [])
+
+    def test_the_version_says_v2(self) -> None:
+        self.assertEqual(self._round_trip()["v"], PAYLOAD_VERSION)
+        self.assertEqual(PAYLOAD_VERSION, 2)

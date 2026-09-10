@@ -121,6 +121,30 @@ def build_ambience_zone_samples(
 ) -> list[ZoneSample]:
     """Turn one frame into per-bulb samples, ordered to match ``entity_ids``."""
 
+    return build_ambience(
+        raw, width, height, sample_stride, color_boost,
+        entity_ids, near_entity_ids, last_colors,
+    )[0]
+
+
+def build_ambience(
+    raw: bytes,
+    width: int,
+    height: int,
+    sample_stride: int,
+    color_boost: float,
+    entity_ids: list[str],
+    near_entity_ids: list[str],
+    last_colors: dict[str, RgbColor],
+) -> tuple[list[ZoneSample], AmbienceFrame]:
+    """Per-bulb samples **and** the frame they came from.
+
+    The bulbs only ever need the samples -- one colour each. The frame carries
+    the whole weighted palette, which is far more information than six lamps can
+    show and exactly what a 97-LED strip wants. Returning both lets a consumer
+    that can render a gradient do so without sampling the screen a second time.
+    """
+
     frame = sample_frame(raw, width, height, sample_stride)
 
     near_set = set(near_entity_ids)
@@ -139,7 +163,7 @@ def build_ambience_zone_samples(
     assigned = _assign_group(near_group, near_colors, last_colors)
     assigned.update(_assign_group(far_group, far_colors, last_colors))
 
-    return [
+    samples = [
         ZoneSample(
             zone=_NEAR_ZONE if entity_id in near_set else _FAR_ZONE,
             color=assigned[entity_id],
@@ -148,6 +172,7 @@ def build_ambience_zone_samples(
         )
         for entity_id in entity_ids
     ]
+    return samples, frame
 
 
 def split_near_far_samples(
