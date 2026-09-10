@@ -457,9 +457,9 @@ Installed tasks:
 - `MatterLights Screen Sync`
 - `MatterLights Dashboard`
 
-Both are launched in hidden background hosts so they can run at logon without opening console windows.
+Both run the venv's `pythonw.exe` directly -- `-m matterlights` and `-m matterlights.dashboard` -- which never opens a console. A hidden PowerShell host cannot do this: Windows 11's default console is Windows Terminal, which ignores `-WindowStyle Hidden`, and this script's earlier form put a terminal window on the taskbar at every logon. With no console, startup errors go to the log (`LOG_PATH` in `.env`, or `%LOCALAPPDATA%\matterlights\matterlights.log`), and the script checks for the venv and `.env` once, when it installs, rather than at every start. The dashboard's port is `DASHBOARD_PORT` in `.env`. If the tasks already exist and were last written from an elevated shell, run the script elevated, or re-registering them is refused. `scripts\start-*.ps1` without `-Foreground` start `pythonw.exe` in the background the same way.
 
-Neither has a time limit. Task Scheduler's default stops a task 72 hours after its logon trigger started it, so a session left logged in for three days lost its sync, and the sync's own log simply ended. Tasks installed before 2026-09-10 still carry that default; re-running `install-autostart.ps1` replaces them. `(Get-ScheduledTask 'MatterLights Screen Sync').Settings.ExecutionTimeLimit` should read `PT0S`.
+Neither task has a time limit. Task Scheduler's default stops a task 72 hours after its logon trigger started it, so a session left logged in for three days lost its sync, and the sync's own log simply ended. Tasks the script installed before 2026-09-10 carry both faults -- the terminal window and the 72-hour limit -- and re-running `install-autostart.ps1` replaces them. A copy already running keeps its old definition until it next starts, so log off and back on. Afterwards `(Get-ScheduledTask 'MatterLights Screen Sync').Actions.Execute` ends in `pythonw.exe` and `.Settings.ExecutionTimeLimit` reads `PT0S`.
 
 ## Configuration
 
@@ -730,6 +730,8 @@ Useful manual checks:
 .\.venv\Scripts\python.exe -m compileall src tests
 powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
 ```
+
+With PowerShell 7 on `PATH`, or `MATTERLIGHTS_PWSH` pointing at a `pwsh` anywhere, the suite also parses every script under `scripts\` with it; without one, only that test skips. The rest of `tests/test_windows_launchers.py` reads the scripts as text and runs everywhere.
 
 On Linux:
 

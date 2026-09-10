@@ -1,21 +1,22 @@
 param(
     [string]$SyncTaskName = "MatterLights Screen Sync",
-    [string]$DashboardTaskName = "MatterLights Dashboard",
-    [int]$DashboardPort = 8770
+    [string]$DashboardTaskName = "MatterLights Dashboard"
 )
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$syncScript = Join-Path $repoRoot "scripts\start-sync.ps1"
-$dashboardScript = Join-Path $repoRoot "scripts\start-dashboard.ps1"
+$pythonw = Join-Path $repoRoot ".venv\Scripts\pythonw.exe"
+$envFile = Join-Path $repoRoot ".env"
 
-if (-not (Test-Path $syncScript)) {
-    throw "Sync start script not found at $syncScript."
+# The tasks run pythonw directly, and pythonw has no console to report a
+# failure on -- so the checks start-sync.ps1 and start-dashboard.ps1 make at
+# every start are made here, once, instead.
+if (-not (Test-Path $pythonw)) {
+    throw "Virtualenv interpreter not found at $pythonw. Create the venv and install the package first."
 }
-
-if (-not (Test-Path $dashboardScript)) {
-    throw "Dashboard start script not found at $dashboardScript."
+if (-not (Test-Path $envFile)) {
+    throw "Missing .env at $envFile. Run guided setup first or create the file manually."
 }
 
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -27,11 +28,20 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 $settings.ExecutionTimeLimit = "PT0S"
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 
-$syncArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$syncScript`" -Foreground"
-$syncAction = New-ScheduledTaskAction -Execute "powershell" -Argument $syncArgs -WorkingDirectory $repoRoot
-$dashboardArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dashboardScript`" -Port $DashboardPort -Foreground -NoBrowser"
-$dashboardAction = New-ScheduledTaskAction -Execute "powershell" -Argument $dashboardArgs -WorkingDirectory $repoRoot
+# pythonw, not a hidden PowerShell. Windows 11's default console is Windows
+# Terminal, which ignores -WindowStyle Hidden and draws the window anyway: the
+# earlier form of this script, powershell -WindowStyle Hidden -File start-*.ps1,
+# put a terminal on the taskbar at every logon. pythonw is a GUI-subsystem
+# binary and never has a console, so there is no window to hide. Startup errors
+# go to the log -- LOG_PATH in .env, or %LOCALAPPDATA%\matterlights\matterlights.log
+# -- and the dashboard's port is DASHBOARD_PORT in .env, since a task cannot
+# pass an environment variable.
+$syncAction = New-ScheduledTaskAction -Execute $pythonw -Argument "-m matterlights" -WorkingDirectory $repoRoot
+$dashboardAction = New-ScheduledTaskAction -Execute $pythonw -Argument "-m matterlights.dashboard" -WorkingDirectory $repoRoot
 
+# -ErrorAction Stop on each: Register-ScheduledTask reports a failure as a
+# non-terminating error, and without it an "Access is denied" scrolls past with
+# the success message printed right under it.
 Register-ScheduledTask `
     -TaskName $SyncTaskName `
     -Description "Sync Home Assistant lights to the primary screen color." `
@@ -39,7 +49,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Force | Out-Null
+    -Force -ErrorAction Stop | Out-Null
 
 Register-ScheduledTask `
     -TaskName $DashboardTaskName `
@@ -48,7 +58,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Force | Out-Null
+    -Force -ErrorAction Stop | Out-Null
 
 try {
     Start-ScheduledTask -TaskName $SyncTaskName -ErrorAction Stop
@@ -65,4 +75,4 @@ catch {
 }
 
 Write-Host "Installed scheduled tasks '$SyncTaskName' and '$DashboardTaskName' for $currentUser."
-Write-Host "Both tasks start automatically at logon. The installer also attempted to start them immediately."
+Write-Host "Both run .venv\Scripts\pythonw.exe at logon. A copy that was already running keeps its old definition until it next starts; log off and on to be sure."
