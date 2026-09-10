@@ -121,7 +121,7 @@ class SignalHookTest(unittest.TestCase):
             "time.sleep(30)"
         )
         child = subprocess.Popen(
-            [sys.executable, "-c", code], stdout=subprocess.PIPE, text=True
+            [sys.executable, "-c", code], stdout=subprocess.PIPE, encoding="utf-8"
         )
         self.assertEqual("ready", child.stdout.readline().strip())
         child.send_signal(signal.SIGTERM)

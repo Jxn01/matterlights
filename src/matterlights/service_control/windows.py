@@ -253,7 +253,14 @@ foreach ($id in $ids) {{
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
             cwd=_repo_root(),
             capture_output=True,
-            text=True,
+            # Windows PowerShell writes a pipe in [Console]::OutputEncoding, the
+            # console's OEM code page (850 on a Western-European install) -- not
+            # the ANSI one Python would assume (1252). The two disagree on every
+            # accented letter, and cp1252 has no character at all for five OEM
+            # bytes, the u-umlaut among them. Decode as OEM; never let a stray
+            # byte raise out of a status poll.
+            encoding="oem",
+            errors="replace",
             check=False,
             # Without this the status poll flashes a console window several
             # times a minute for as long as the dashboard page is open.

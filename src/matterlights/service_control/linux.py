@@ -173,7 +173,7 @@ class SystemdServiceControl:
             ],
             check=True,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
         )
 
     def _unit_exists(self, unit: str) -> bool:
@@ -184,7 +184,7 @@ class SystemdServiceControl:
         result = subprocess.run(
             ["systemctl", "--user", *args],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
             check=False,
         )
         if check and result.returncode != 0:

@@ -36,7 +36,7 @@ class LightsOffImportPurityTest(unittest.TestCase):
             "print(','.join(bad))\n"
         )
         result = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+            [sys.executable, "-c", code], capture_output=True, encoding="utf-8", check=True
         )
         pulled_in = result.stdout.strip()
         self.assertEqual(
@@ -56,7 +56,7 @@ class LightsOffImportPurityTest(unittest.TestCase):
             "print('ok')\n"
         )
         result = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+            [sys.executable, "-c", code], capture_output=True, encoding="utf-8", check=True
         )
         self.assertEqual("ok", result.stdout.strip())
 

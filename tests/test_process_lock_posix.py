@@ -64,7 +64,7 @@ class FlockSingletonTest(unittest.TestCase):
         )
         result = subprocess.run(
             [sys.executable, "-c", code],
-            capture_output=True, text=True, check=True,
+            capture_output=True, encoding="utf-8", check=True,
             env={**os.environ, "XDG_RUNTIME_DIR": self.runtime},
         )
         return result.stdout.strip()

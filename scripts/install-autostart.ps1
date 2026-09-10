@@ -21,6 +21,10 @@ if (-not (Test-Path $dashboardScript)) {
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -StartWhenAvailable
+# No time limit. Left unset, Task Scheduler stops a task 72 hours after its logon
+# trigger started it: a sync left running through a three-day session would just
+# stop, and its own log would simply end. PT0S is "no limit" in the task XML.
+$settings.ExecutionTimeLimit = "PT0S"
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 
 $syncArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$syncScript`" -Foreground"

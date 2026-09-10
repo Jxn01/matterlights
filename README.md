@@ -459,6 +459,8 @@ Installed tasks:
 
 Both are launched in hidden background hosts so they can run at logon without opening console windows.
 
+Neither has a time limit. Task Scheduler's default stops a task 72 hours after its logon trigger started it, so a session left logged in for three days lost its sync, and the sync's own log simply ended. Tasks installed before 2026-09-10 still carry that default; re-running `install-autostart.ps1` replaces them. `(Get-ScheduledTask 'MatterLights Screen Sync').Settings.ExecutionTimeLimit` should read `PT0S`.
+
 ## Configuration
 
 The app reads `.env` first and falls back to shell environment variables. The most important settings are:

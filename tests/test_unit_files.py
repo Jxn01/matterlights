@@ -22,14 +22,14 @@ def read_raw(name: str) -> str:
     raw text, or the test quietly reads a single value and calls the rest missing.
     """
 
-    return (UNIT_DIR / name).read_text()
+    return (UNIT_DIR / name).read_text(encoding="utf-8")
 
 
 def read_unit(name: str) -> configparser.ConfigParser:
     parser = configparser.ConfigParser(strict=False)
     # systemd keys are case-sensitive; configparser lowercases them by default.
     parser.optionxform = str
-    parser.read(UNIT_DIR / name)
+    parser.read(UNIT_DIR / name, encoding="utf-8")
     return parser
 
 
@@ -124,12 +124,12 @@ class TemplatingTest(unittest.TestCase):
     def test_every_unit_uses_the_install_dir_placeholder(self) -> None:
         for path in UNIT_DIR.glob("*.service"):
             with self.subTest(unit=path.name):
-                self.assertIn("@INSTALL_DIR@", path.read_text())
+                self.assertIn("@INSTALL_DIR@", path.read_text(encoding="utf-8"))
 
     def test_no_absolute_home_paths_leaked_into_the_units(self) -> None:
         for path in UNIT_DIR.glob("*.service"):
             with self.subTest(unit=path.name):
-                self.assertNotIn("/home/", path.read_text())
+                self.assertNotIn("/home/", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
