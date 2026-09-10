@@ -16,6 +16,7 @@ from matterlights import capture as _capture
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
+from matterlights.light_worker import LightWorker
 from matterlights.logging_setup import configure_logging
 from matterlights.playback import MODE_CUSTOM, CustomPlayer, effective_capture_target, load_control_state
 from matterlights.process_lock import acquire_sync_singleton
@@ -147,6 +148,7 @@ def main() -> int:
     master_off_active = False
     last_rgb_frame: dict | None = None
     last_light_update = 0.0
+    light_backoff_until = 0.0
     display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
 
     # Optional local RGB extension. Imported lazily and only when configured, so
@@ -178,6 +180,9 @@ def main() -> int:
     shutdown_hook = (
         start_shutdown_hook(turn_off_all_lights, LOGGER) if settings.turn_off_on_shutdown else None
     )
+
+    # Home Assistant writes run here, never on the capture loop: see light_worker.
+    light_worker = LightWorker(client, LOGGER)
 
     def reset_runtime_caches() -> None:
         last_colors.clear()
@@ -442,7 +447,23 @@ def main() -> int:
                         # skip the RGB publish above -- that is the whole point
                         # of doing it here rather than earlier.
                         now = time.monotonic()
-                        if now - last_light_update < settings.light_update_interval_seconds:
+                        due = (
+                            now - last_light_update >= settings.light_update_interval_seconds
+                            and now >= light_backoff_until
+                        )
+                        if not due:
+                            # Nothing owed to the bulbs this tick. Collect any
+                            # finished work, then get straight back to capturing.
+                            for sent_states, failed_entity_ids in light_worker.collect():
+                                failed_entity_id_set = set(failed_entity_ids)
+                                retry_entity_ids = failed_entity_id_set
+                                _record_successful_states(
+                                    sent_states, failed_entity_id_set, last_colors, off_entity_ids
+                                )
+                                if len(failed_entity_ids) == len(sent_states):
+                                    light_backoff_until = (
+                                        time.monotonic() + settings.error_retry_seconds
+                                    )
                             sleep_seconds = settings.sync_interval_seconds - (
                                 time.monotonic() - iteration_started
                             )
@@ -466,28 +487,47 @@ def main() -> int:
                             settings.brightness_floor,
                         )
 
-                        if desired_states:
-                            failed_entity_ids = client.apply_light_updates(
-                                [state.update for state in desired_states],
-                                settings.transition_seconds,
-                            )
-                            if len(failed_entity_ids) == len(desired_states):
-                                raise RuntimeError("No lights were updated successfully")
+                        # 🚨 Handed to a worker, never awaited here.
+                        #
+                        # This is a network call with a multi-second timeout. Made
+                        # inline, one unreachable bulb froze capture, sampling and
+                        # the RGB publish for its full duration -- and the
+                        # extension then went dark on its staleness rule, so a
+                        # single flaky bulb blanked the whole case.
+                        if desired_states and not light_worker.busy:
+                            light_worker.submit(desired_states, settings.transition_seconds)
 
+                        # The bookkeeping stays on THIS thread. _build_desired_states
+                        # reads last_colors, off_entity_ids and retry_entity_ids on
+                        # the next tick, so letting a worker write them would race
+                        # for no benefit.
+                        for sent_states, failed_entity_ids in light_worker.collect():
                             failed_entity_id_set = set(failed_entity_ids)
                             retry_entity_ids = failed_entity_id_set
-                            _record_successful_states(desired_states, failed_entity_id_set, last_colors, off_entity_ids)
-
-                            if failed_entity_ids:
+                            _record_successful_states(
+                                sent_states, failed_entity_id_set, last_colors, off_entity_ids
+                            )
+                            if len(failed_entity_ids) == len(sent_states):
+                                # Every light failed. Back off from Home Assistant
+                                # without stalling the loop -- the RGB extension is
+                                # still watching the same screen and is entitled to
+                                # its frames.
+                                light_backoff_until = (
+                                    time.monotonic() + settings.error_retry_seconds
+                                )
+                                LOGGER.warning(
+                                    "No lights were updated successfully; pausing light "
+                                    "updates for %.1fs (capture and the RGB extension "
+                                    "carry on)",
+                                    settings.error_retry_seconds,
+                                )
+                            elif failed_entity_ids:
                                 LOGGER.warning(
                                     "Updated zoned lights with failures for: %s",
                                     ", ".join(failed_entity_ids),
                                 )
                             else:
-                                LOGGER.debug(
-                                    "Updated %s zoned lights",
-                                    len(desired_states),
-                                )
+                                LOGGER.debug("Updated %s zoned lights", len(sent_states))
                 except KeyboardInterrupt:
                     raise
                 except _capture.CaptureUnavailable as error:
@@ -537,6 +577,10 @@ def main() -> int:
         LOGGER.exception("Sync failed")
         return 1
     finally:
+        # Stopped before the shutdown hook turns everything off, so an in-flight
+        # colour write cannot land after the lights-out request and leave a lamp
+        # lit for the night.
+        light_worker.stop()
         if display_monitor is not None:
             display_monitor.stop()
         if shutdown_hook is not None:

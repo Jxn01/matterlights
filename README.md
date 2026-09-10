@@ -565,6 +565,35 @@ the 5 Hz configuration it replaced. The capture stream is not a separate limit �
 fps of 4K from Mutter. The cost is dominated by sampling, so lowering
 `SAMPLE_STRIDE` for finer colour multiplies it again.
 
+### 🚨 Home Assistant writes never run on the capture loop
+
+They are network calls with a multi-second timeout. Inline, one unreachable
+Matter bulb froze *everything* for its duration — capture, sampling, and the RGB
+publish — and the extension then went dark on its staleness rule, so a single
+flaky bulb blanked the whole case every minute or two.
+
+`light_worker.LightWorker` runs the call on one background thread. Only the call
+moves: every piece of shared state (`last_colors`, `off_entity_ids`,
+`retry_entity_ids`) is read by `_build_desired_states` on the loop thread and
+written when the loop *collects* the result, so nothing races. If a request
+arrives while one is in flight it replaces any request still queued — a backlog
+of light updates is worthless, since by the time a stale one was sent the screen
+has moved on.
+
+Measured at the socket, 20 Hz, with **8 bulb timeouts during the run**:
+
+| | |
+|---|---|
+| frames | 1498 in 75 s |
+| median gap | 50 ms |
+| p99 | 54 ms |
+| **max gap** | **58 ms** |
+
+Inline, each of those timeouts was a 3000 ms gap.
+
+When every light fails, the loop sets a `light_backoff_until` deadline instead of
+sleeping — Home Assistant gets its rest and capture carries on regardless.
+
 ⚠️ **A Home Assistant failure must not take the RGB extension down with it.**
 When a bulb refuses writes the loop backs off for `ERROR_RETRY_SECONDS`, which is
 right — there is no point hammering it. But the extension is a bystander watching
