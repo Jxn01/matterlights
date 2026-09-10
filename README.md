@@ -529,10 +529,22 @@ capturing a 3840x2160 screen:
 |---|---|---|
 | `0.2` | 5 Hz | 16.3% of one core |
 | `0.1` | 10 Hz | 32.4% of one core |
-| `0.05` | 20 Hz | 44.9% of one core |
+| `0.05` | 20 Hz | 44.9% of one core (16.6% with numpy) |
 
-Scaling is sub-linear past 10 Hz, so the practical ceiling is roughly **30–35
-Hz** before one core saturates. The capture stream is not a separate limit —
+**numpy changes this picture completely.** Walking the pixels *is* the sync
+loop's cost, and `sample_frame` now vectorises it when numpy is importable,
+falling back to the original Python loop where it is not (Windows). Measured on a
+3840×2160 frame:
+
+| Sampling | pixels/frame | Python | numpy |
+|---|---|---|---|
+| `SAMPLE_STRIDE=121` | 68,950 | 23.9 ms (42 Hz) | **1.8 ms (571 Hz)** |
+| stride 25 | 331,776 | 115.5 ms (8.7 Hz) | **5.8 ms (172 Hz)** |
+| stride 9 | 921,600 | 307.0 ms (3.3 Hz) | **14.7 ms (68 Hz)** |
+
+A guard test asserts the two paths produce identical histograms, palettes and
+mixes — otherwise the same screen would light differently depending on whether
+numpy happened to be installed. The capture stream is not a separate limit —
 `caps_framerate()` asks for **twice** the sync rate, so 20 Hz already requests 40
 fps of 4K from Mutter. The cost is dominated by sampling, so lowering
 `SAMPLE_STRIDE` for finer colour multiplies it again.

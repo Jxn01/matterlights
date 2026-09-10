@@ -70,6 +70,19 @@ class PaletteColor:
 
 
 @dataclass(frozen=True, slots=True)
+class _Histogram:
+    """What one pass over the pixels produced, however it was counted."""
+
+    bins: list
+    brightness_total: int
+    active_count: int
+    pixel_count: int
+    red_total: int
+    green_total: int
+    blue_total: int
+
+
+@dataclass(frozen=True, slots=True)
 class AmbienceFrame:
     palette: tuple[PaletteColor, ...]
     mix: RgbColor
@@ -241,9 +254,84 @@ def render_for_leds(
 
 
 def sample_frame(raw: bytes, width: int, height: int, sample_stride: int) -> AmbienceFrame:
-    """Distill one frame into a weighted palette plus global brightness stats."""
+    """Distill one frame into a weighted palette plus global brightness stats.
+
+    ⚠️ **This is the whole cost of the sync loop.** Everything else -- Home
+    Assistant, the RGB socket, the colour maths -- is noise beside walking the
+    pixels. At 3840x2160 with ``SAMPLE_STRIDE=121`` that is ~68,400 pixels a
+    frame, and in pure Python it was ~45% of a core at 20 Hz, which is what
+    capped the achievable sync rate. The GPU is not involved at any point: the
+    compositor has already produced the buffer and this only reads bytes.
+
+    So there are two implementations of the histogram, and they must agree
+    exactly -- a guard test asserts that on synthetic frames. numpy is used when
+    it is importable, which is every Linux install here; the Python loop remains
+    for anywhere it is not (Windows, where this program also runs).
+    """
 
     sample_step = max(1, round(sample_stride ** 0.5))
+    histogram = _histogram_numpy(raw, width, height, sample_step)
+    if histogram is None:
+        histogram = _histogram_python(raw, width, height, sample_step)
+    return _frame_from_histogram(histogram)
+
+
+def _histogram_numpy(raw: bytes, width: int, height: int, sample_step: int):
+    """Vectorised histogram, or None when numpy is unavailable."""
+
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover - exercised only where numpy is absent
+        return None
+
+    needed = height * width * 4
+    if len(raw) < needed:
+        return None
+    frame = np.frombuffer(raw, dtype=np.uint8, count=needed).reshape(height, width, 4)
+    sub = frame[::sample_step, ::sample_step, :3].astype(np.int32)
+    blue = sub[..., 0].ravel()
+    green = sub[..., 1].ravel()
+    red = sub[..., 2].ravel()
+    if red.size == 0:
+        return _Histogram([], 0, 0, 0, 0, 0, 0)
+
+    luma = (54 * red + 183 * green + 19 * blue) >> 8
+    active = (
+        (red >= _ACTIVE_CHANNEL_THRESHOLD)
+        | (green >= _ACTIVE_CHANNEL_THRESHOLD)
+        | (blue >= _ACTIVE_CHANNEL_THRESHOLD)
+    )
+    keys = ((red >> _BIN_SHIFT) << 6) | ((green >> _BIN_SHIFT) << 3) | (blue >> _BIN_SHIFT)
+    size = 1 << 9
+    counts = np.bincount(keys, minlength=size)
+    red_sums = np.bincount(keys, weights=red, minlength=size)
+    green_sums = np.bincount(keys, weights=green, minlength=size)
+    blue_sums = np.bincount(keys, weights=blue, minlength=size)
+    filled = np.nonzero(counts)[0]
+
+    bins = [
+        (
+            int(counts[key]),
+            int(red_sums[key]),
+            int(green_sums[key]),
+            int(blue_sums[key]),
+        )
+        for key in filled
+    ]
+    return _Histogram(
+        bins,
+        int(luma.sum()),
+        int(np.count_nonzero(active)),
+        int(red.size),
+        int(red.sum()),
+        int(green.sum()),
+        int(blue.sum()),
+    )
+
+
+def _histogram_python(raw: bytes, width: int, height: int, sample_step: int):
+    """The original loop. Kept for platforms without numpy."""
+
     bins: dict[int, list[int]] = {}
     bins_get = bins.get
     brightness_total = 0
@@ -266,7 +354,11 @@ def sample_frame(raw: bytes, width: int, height: int, sample_stride: int) -> Amb
             green_total += green
             blue_total += blue
             pixel_count += 1
-            if red >= _ACTIVE_CHANNEL_THRESHOLD or green >= _ACTIVE_CHANNEL_THRESHOLD or blue >= _ACTIVE_CHANNEL_THRESHOLD:
+            if (
+                red >= _ACTIVE_CHANNEL_THRESHOLD
+                or green >= _ACTIVE_CHANNEL_THRESHOLD
+                or blue >= _ACTIVE_CHANNEL_THRESHOLD
+            ):
                 active_count += 1
 
             key = ((red >> _BIN_SHIFT) << 6) | ((green >> _BIN_SHIFT) << 3) | (blue >> _BIN_SHIFT)
@@ -279,19 +371,33 @@ def sample_frame(raw: bytes, width: int, height: int, sample_stride: int) -> Amb
                 entry[2] += green
                 entry[3] += blue
 
-    if pixel_count == 0:
+    return _Histogram(
+        [tuple(entry) for entry in bins.values()],
+        brightness_total,
+        active_count,
+        pixel_count,
+        red_total,
+        green_total,
+        blue_total,
+    )
+
+
+def _frame_from_histogram(histogram) -> AmbienceFrame:
+    """The half that is identical whichever way the pixels were counted."""
+
+    if histogram.pixel_count == 0:
         return AmbienceFrame((), RgbColor(0, 0, 0), 0, 0.0)
 
-    average_brightness = brightness_total // pixel_count
-    active_ratio = active_count / pixel_count
+    average_brightness = histogram.brightness_total // histogram.pixel_count
+    active_ratio = histogram.active_count / histogram.pixel_count
     average_color = RgbColor(
-        red=red_total // pixel_count,
-        green=green_total // pixel_count,
-        blue=blue_total // pixel_count,
+        red=histogram.red_total // histogram.pixel_count,
+        green=histogram.green_total // histogram.pixel_count,
+        blue=histogram.blue_total // histogram.pixel_count,
     )
 
     candidates: list[tuple[float, int, int, int]] = []
-    for count, red_sum, green_sum, blue_sum in bins.values():
+    for count, red_sum, green_sum, blue_sum in histogram.bins:
         red = red_sum // count
         green = green_sum // count
         blue = blue_sum // count

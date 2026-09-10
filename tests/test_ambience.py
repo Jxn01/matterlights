@@ -273,3 +273,81 @@ class SplitNearFarSamplesTest(unittest.TestCase):
 
     def test_no_samples_gives_no_samples(self) -> None:
         self.assertEqual(split_near_far_samples([]), (None, None))
+
+
+class HistogramEquivalenceTest(unittest.TestCase):
+    """🚨 Two implementations of the same histogram must not drift.
+
+    The numpy path is ~100x faster and is what runs on this rig; the Python loop
+    is what runs anywhere numpy is missing (Windows). If they disagree, the same
+    screen produces different lights on different machines -- and the difference
+    would show up as "the ambience feels off", not as a failure.
+    """
+
+    def _frame(self, pixels, width, height):
+        """BGRx bytes from a list of (r, g, b) rows."""
+
+        raw = bytearray()
+        for row in pixels:
+            for r, g, b in row:
+                raw += bytes((b, g, r, 255))
+        return bytes(raw)
+
+    def _both(self, raw, width, height, step):
+        from matterlights.ambience import _histogram_numpy, _histogram_python
+
+        return _histogram_numpy(raw, width, height, step), _histogram_python(
+            raw, width, height, step
+        )
+
+    def _assert_same(self, raw, width, height, step):
+        fast, slow = self._both(raw, width, height, step)
+        self.assertIsNotNone(fast, "numpy path should be available here")
+        self.assertEqual(fast.pixel_count, slow.pixel_count)
+        self.assertEqual(fast.brightness_total, slow.brightness_total)
+        self.assertEqual(fast.active_count, slow.active_count)
+        self.assertEqual(fast.red_total, slow.red_total)
+        self.assertEqual(fast.green_total, slow.green_total)
+        self.assertEqual(fast.blue_total, slow.blue_total)
+        self.assertEqual(sorted(fast.bins), sorted(slow.bins), "bin contents must match")
+
+    def test_a_flat_colour(self) -> None:
+        raw = self._frame([[(200, 40, 90)] * 16] * 16, 16, 16)
+        self._assert_same(raw, 16, 16, 1)
+
+    def test_a_gradient(self) -> None:
+        rows = [[(x * 8 % 256, y * 8 % 256, (x + y) * 4 % 256) for x in range(32)] for y in range(32)]
+        self._assert_same(self._frame(rows, 32, 32), 32, 32, 1)
+
+    def test_with_a_stride(self) -> None:
+        """The stride must select the same pixels in both paths."""
+
+        rows = [[(x * 3 % 256, y * 5 % 256, (x * y) % 256) for x in range(40)] for y in range(24)]
+        raw = self._frame(rows, 40, 24)
+        for step in (1, 2, 3, 7, 11):
+            with self.subTest(step=step):
+                self._assert_same(raw, 40, 24, step)
+
+    def test_pure_black_and_pure_white(self) -> None:
+        for colour in ((0, 0, 0), (255, 255, 255)):
+            with self.subTest(colour=colour):
+                self._assert_same(self._frame([[colour] * 8] * 8, 8, 8), 8, 8, 1)
+
+    def test_the_whole_frame_agrees_end_to_end(self) -> None:
+        """Not just the histogram -- the palette and mix it produces."""
+
+        from matterlights.ambience import _frame_from_histogram
+
+        rows = [[((x * 17) % 256, (y * 29) % 256, (x + y) % 256) for x in range(48)] for y in range(48)]
+        raw = self._frame(rows, 48, 48)
+        fast, slow = self._both(raw, 48, 48, 2)
+        a, b = _frame_from_histogram(fast), _frame_from_histogram(slow)
+        self.assertEqual(a.mix, b.mix)
+        self.assertEqual(a.average_brightness, b.average_brightness)
+        self.assertAlmostEqual(a.active_ratio, b.active_ratio)
+        self.assertEqual([e.color for e in a.palette], [e.color for e in b.palette])
+
+    def test_a_short_buffer_falls_back_rather_than_reading_past_the_end(self) -> None:
+        from matterlights.ambience import _histogram_numpy
+
+        self.assertIsNone(_histogram_numpy(b"\x00" * 16, 64, 64, 1))
