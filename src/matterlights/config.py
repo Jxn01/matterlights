@@ -18,7 +18,7 @@ class Settings:
     control_state_file: Path | None = None
     respect_display_sleep: bool = True
     turn_off_on_shutdown: bool = True
-    # Optional local RGB extension (linux-rgb). When disabled -- the default --
+    # Optional local RGB extension (ambience-rgb). When disabled -- the default --
     # nothing is published, the dashboard hides its RGB control entirely, and
     # this program behaves exactly as it did before the extension existed.
     rgb_extension_enabled: bool = False

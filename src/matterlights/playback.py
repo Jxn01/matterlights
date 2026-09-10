@@ -78,7 +78,7 @@ class ControlState:
     # regardless of mode, until switched back on; it lives in the control file,
     # so it survives reboots of both the PC and the sync loop.
     lights_on: bool = True
-    # Same idea for the optional RGB extension (linux-rgb), which drives local
+    # Same idea for the optional RGB extension (ambience-rgb), which drives local
     # RGB hardware from the same ambience colours. Kept here rather than in a
     # second control file so there is exactly ONE source of truth that both the
     # dashboard and the extension read. Defaults true: an existing control file

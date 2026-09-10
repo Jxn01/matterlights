@@ -509,7 +509,7 @@ LIGHT_ZONE_LAYOUT=top-left,top-center,top-right,bottom-right,bottom-center,botto
 MatterLights can hand each tick's ambience colours to a separate program that
 drives RGB hardware on the same machine — motherboard headers, RAM, GPU, an AIO
 pump — so the case matches the lamps. The companion project is
-[`linux-rgb`](https://github.com/Jxn01/linux-rgb) (private; specific to one rig).
+[`ambience-rgb`](https://github.com/Jxn01/ambience-rgb).
 
 **Off by default and inert when off.** With `RGB_EXTENSION_ENABLED=false` nothing
 is published, no socket is opened, the publisher module is never even imported,
@@ -517,7 +517,7 @@ and the dashboard renders no RGB control.
 
 ```ini
 RGB_EXTENSION_ENABLED=true
-RGB_PUBLISH_SOCKET=/run/user/1000/linux-rgb.sock
+RGB_PUBLISH_SOCKET=/run/user/1000/ambience-rgb.sock
 ```
 
 ⚠️ **`SYNC_INTERVAL_SECONDS` is the ceiling for the RGB extension too**, since it
