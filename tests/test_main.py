@@ -327,3 +327,67 @@ class PalettePublishTest(unittest.TestCase):
         published = self._publish(None)
         self.assertEqual(published["near"], (255, 0, 0))
         self.assertEqual(published["far"], (0, 0, 255))
+
+
+class SleepPublishingTest(unittest.TestCase):
+    """🚨 A bulb failure must not turn the case off and on again.
+
+    The sync loop backs off for five seconds when Home Assistant refuses writes,
+    which is right -- there is no point hammering it. But the RGB extension is a
+    bystander watching the same screen, and it goes dark after three seconds of
+    silence, correctly, because a frozen frame looks exactly like working sync.
+    So one flaky bulb produced a visible off/on cycle across the whole case,
+    every retry, with nothing in either log to say why.
+    """
+
+    class _Publisher:
+        def __init__(self) -> None:
+            self.sent: list[dict] = []
+
+        def publish(self, **kwargs) -> None:
+            self.sent.append(kwargs)
+
+    def test_it_keeps_publishing_for_the_whole_backoff(self) -> None:
+        from matterlights.main import _sleep_publishing
+
+        publisher = self._Publisher()
+        _sleep_publishing(publisher, {"near": (1, 2, 3)}, 0.3, 0.05)
+        self.assertGreaterEqual(len(publisher.sent), 3)
+        self.assertTrue(all(frame == {"near": (1, 2, 3)} for frame in publisher.sent))
+
+    def test_it_still_sleeps_the_requested_time(self) -> None:
+        """The backoff has to actually back off, or it defeats its own purpose."""
+
+        import time
+        from matterlights.main import _sleep_publishing
+
+        started = time.monotonic()
+        _sleep_publishing(self._Publisher(), {"near": (0, 0, 0)}, 0.25, 0.05)
+        self.assertGreaterEqual(time.monotonic() - started, 0.2)
+
+    def test_no_publisher_is_just_a_sleep(self) -> None:
+        from matterlights.main import _sleep_publishing
+
+        _sleep_publishing(None, {"near": (0, 0, 0)}, 0.1, 0.05)
+
+    def test_no_frame_yet_is_just_a_sleep(self) -> None:
+        """The very first iteration can fail before anything was published."""
+
+        from matterlights.main import _sleep_publishing
+
+        publisher = self._Publisher()
+        _sleep_publishing(publisher, None, 0.1, 0.05)
+        self.assertEqual(publisher.sent, [])
+
+    def test_a_zero_interval_cannot_spin(self) -> None:
+        from matterlights.main import _sleep_publishing
+
+        publisher = self._Publisher()
+        _sleep_publishing(publisher, {"near": (0, 0, 0)}, 0.2, 0.0)
+        self.assertLess(len(publisher.sent), 60, "a 0 interval must not become a busy loop")
+
+    def test_publish_returns_the_payload_it_sent(self) -> None:
+        """That return value is what the backoff republishes."""
+
+        published = PalettePublishTest()._publish(None)
+        self.assertIn("near", published)

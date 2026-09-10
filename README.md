@@ -529,10 +529,22 @@ capturing a 3840x2160 screen:
 |---|---|---|
 | `0.2` | 5 Hz | 16.3% of one core |
 | `0.1` | 10 Hz | 32.4% of one core |
+| `0.05` | 20 Hz | 44.9% of one core |
 
-It scales linearly, and the capture pipeline is pinned at `max-framerate=10/1`,
-so 10 Hz is the useful ceiling without changing that too. The cost is dominated
-by sampling, so lowering `SAMPLE_STRIDE` for finer colour multiplies it again.
+Scaling is sub-linear past 10 Hz, so the practical ceiling is roughly **30–35
+Hz** before one core saturates. The capture stream is not a separate limit —
+`caps_framerate()` asks for **twice** the sync rate, so 20 Hz already requests 40
+fps of 4K from Mutter. The cost is dominated by sampling, so lowering
+`SAMPLE_STRIDE` for finer colour multiplies it again.
+
+⚠️ **A Home Assistant failure must not take the RGB extension down with it.**
+When a bulb refuses writes the loop backs off for `ERROR_RETRY_SECONDS`, which is
+right — there is no point hammering it. But the extension is a bystander watching
+the same screen, and it goes dark after three seconds of silence, correctly,
+because a frozen frame looks exactly like working sync. Sleeping through the
+backoff therefore turned the whole case off and on again on every retry, with
+nothing in either log to say why. `_sleep_publishing` keeps republishing the last
+frame for the duration instead.
 
 Enabled, two things change:
 

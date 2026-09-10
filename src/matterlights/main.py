@@ -145,6 +145,7 @@ def main() -> int:
     capture_inhibited = False
     screen_dark_active = False
     master_off_active = False
+    last_rgb_frame: dict | None = None
     display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
 
     # Optional local RGB extension. Imported lazily and only when configured, so
@@ -419,7 +420,9 @@ def main() -> int:
                                 LOGGER.info("Watched screen (%s) is active again; restoring lights", capture_target)
 
                         if rgb_publisher is not None:
-                            _publish_rgb_frame(
+                            # Kept so the error path can keep the extension fed
+                            # while we back off from a Home Assistant failure.
+                            last_rgb_frame = _publish_rgb_frame(
                                 rgb_publisher,
                                 zone_samples,
                                 screen_dark=screen_dark,
@@ -486,7 +489,21 @@ def main() -> int:
                         "Sync iteration failed. Retrying in %.1f seconds.",
                         settings.error_retry_seconds,
                     )
-                    time.sleep(settings.error_retry_seconds)
+                    # 🚨 Keep the RGB extension fed while we back off.
+                    #
+                    # This retry exists to stop hammering a Home Assistant that
+                    # is refusing writes -- a bulb problem. But the extension is
+                    # a bystander: it watches the same screen, and the screen has
+                    # not gone anywhere. Sleeping here silently meant no frames
+                    # for five seconds, and the extension goes dark after three,
+                    # so a single flaky bulb turned the whole case off and on
+                    # again on a loop.
+                    _sleep_publishing(
+                        rgb_publisher,
+                        last_rgb_frame,
+                        settings.error_retry_seconds,
+                        settings.sync_interval_seconds,
+                    )
                     continue
                 if capture_inhibited:
                     capture_inhibited = False
@@ -554,9 +571,29 @@ def _publish_for_rgb_only(
     )
 
 
+def _sleep_publishing(publisher, frame: dict | None, seconds: float, interval: float) -> None:
+    """Sleep, but keep republishing the last frame so a consumer stays fed.
+
+    Used while backing off from a Home Assistant failure. The bulbs are what
+    failed; the screen data is still perfectly good, and a consumer that treats
+    silence as "the publisher died" -- correctly, since a frozen frame looks
+    exactly like working sync -- would otherwise go dark for the whole backoff.
+    """
+
+    interval = max(0.05, interval)
+    deadline = time.monotonic() + max(0.0, seconds)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        if publisher is not None and frame:
+            publisher.publish(**frame)
+        time.sleep(min(interval, remaining))
+
+
 def _publish_rgb_frame(
     publisher, zone_samples, *, screen_dark, display_on, control_state, settings, frame=None
-) -> None:
+) -> dict:
     """Hand this tick's colours to the local RGB extension.
 
     Deliberately passes matterlights' own DECISIONS (``screen_dark``,
@@ -592,9 +629,9 @@ def _publish_rgb_frame(
         ((entry.color.red, entry.color.green, entry.color.blue), entry.weight)
         for entry in (frame.palette if frame is not None else ())
     ]
-    publisher.publish(
-        (near.red, near.green, near.blue),
-        (far.red, far.green, far.blue),
+    payload = dict(
+        near=(near.red, near.green, near.blue),
+        far=(far.red, far.green, far.blue),
         palette=palette,
         # The near group's own numbers, so a consumer reading `brightness`
         # alongside `near` is reading one coherent sample rather than a mix.
@@ -609,6 +646,10 @@ def _publish_rgb_frame(
         lights_on=control_state.lights_on,
         rgb_on=control_state.rgb_on,
     )
+    publisher.publish(**payload)
+    # Handed back so the caller can keep republishing it while backing off from a
+    # Home Assistant failure -- see _sleep_publishing.
+    return payload
 
 
 def _capture_zones_for_mode(color_sync_mode: str, light_zones: list[ScreenZone]) -> list[ScreenZone]:
