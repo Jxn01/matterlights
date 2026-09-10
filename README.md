@@ -520,6 +520,20 @@ RGB_EXTENSION_ENABLED=true
 RGB_PUBLISH_SOCKET=/run/user/1000/linux-rgb.sock
 ```
 
+⚠️ **`SYNC_INTERVAL_SECONDS` is the ceiling for the RGB extension too**, since it
+only ever sees what this loop publishes. Raising the extension's own `usb_hz`
+above this rate buys nothing. Measured on `jxn-garuda` at `SAMPLE_STRIDE=121`,
+capturing a 3840x2160 screen:
+
+| `SYNC_INTERVAL_SECONDS` | rate | CPU |
+|---|---|---|
+| `0.2` | 5 Hz | 16.3% of one core |
+| `0.1` | 10 Hz | 32.4% of one core |
+
+It scales linearly, and the capture pipeline is pinned at `max-framerate=10/1`,
+so 10 Hz is the useful ceiling without changing that too. The cost is dominated
+by sampling, so lowering `SAMPLE_STRIDE` for finer colour multiplies it again.
+
 Enabled, two things change:
 
 * Each ambience frame is sent as one JSON datagram to that socket — near colour,
