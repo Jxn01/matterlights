@@ -544,7 +544,23 @@ falling back to the original Python loop where it is not (Windows). Measured on 
 
 A guard test asserts the two paths produce identical histograms, palettes and
 mixes — otherwise the same screen would light differently depending on whether
-numpy happened to be installed. The capture stream is not a separate limit —
+numpy happened to be installed.
+
+### ⚠️ The bulbs need their own rate
+
+`SYNC_INTERVAL_SECONDS` and the Home Assistant write rate used to be the same
+knob. Taking the loop to 20 Hz for the RGB extension's benefit therefore asked
+six Matter bulbs for twenty updates a second, and they answered with
+`ReadTimeout` — fifteen a minute, measured. The two devices want completely
+different rates: one is a mains lamp over the network, the other is a USB strip
+on the desk.
+
+`LIGHT_UPDATE_INTERVAL_SECONDS` caps the bulb writes independently. `0.0` keeps
+the old behaviour. Skipping a bulb update does **not** skip the RGB publish.
+
+Settled here: 20 Hz loop, `SAMPLE_STRIDE=25`, `LIGHT_UPDATE_INTERVAL_SECONDS=0.2`
+— **30.0% of one core, zero bulb timeouts**, and 4.8× finer colour sampling than
+the 5 Hz configuration it replaced. The capture stream is not a separate limit —
 `caps_framerate()` asks for **twice** the sync rate, so 20 Hz already requests 40
 fps of 4K from Mutter. The cost is dominated by sampling, so lowering
 `SAMPLE_STRIDE` for finer colour multiplies it again.

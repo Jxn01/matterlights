@@ -146,6 +146,7 @@ def main() -> int:
     screen_dark_active = False
     master_off_active = False
     last_rgb_frame: dict | None = None
+    last_light_update = 0.0
     display_monitor = start_display_monitor(LOGGER) if settings.respect_display_sleep else None
 
     # Optional local RGB extension. Imported lazily and only when configured, so
@@ -431,6 +432,24 @@ def main() -> int:
                                 settings=settings,
                                 frame=ambience_frame,
                             )
+
+                        # 🚨 The bulbs get their own rate, separate from the loop.
+                        #
+                        # The loop's rate exists to serve the screen capture and
+                        # the RGB extension. Six Matter bulbs over the network
+                        # want something far slower: driving them at 20 Hz simply
+                        # produced ReadTimeouts. Skipping the bulb work does not
+                        # skip the RGB publish above -- that is the whole point
+                        # of doing it here rather than earlier.
+                        now = time.monotonic()
+                        if now - last_light_update < settings.light_update_interval_seconds:
+                            sleep_seconds = settings.sync_interval_seconds - (
+                                time.monotonic() - iteration_started
+                            )
+                            if sleep_seconds > 0:
+                                time.sleep(sleep_seconds)
+                            continue
+                        last_light_update = now
 
                         preview_overrides = load_preview_overrides(settings.preview_override_file)
                         desired_states = _build_desired_states(

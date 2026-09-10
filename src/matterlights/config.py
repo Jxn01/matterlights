@@ -44,6 +44,18 @@ class Settings:
     sync_interval_seconds: float = 0.2
     inter_light_delay_seconds: float = 0.4
     max_parallel_light_updates: int = 1
+    light_update_interval_seconds: float = 0.0
+    """Minimum gap between Home Assistant writes, independent of the sync rate.
+
+    🚨 **The sync rate and the bulb write rate used to be the same knob.** Taking
+    the loop to 20 Hz for the RGB extension's benefit also asked six Matter bulbs
+    for twenty updates a second, which they cannot take -- Home Assistant started
+    returning ReadTimeout in volume. The bulbs and an LED strip want completely
+    different rates: one is a mains lamp over the network, the other is a USB
+    device on the desk.
+
+    0.0 keeps the old behaviour (write whenever the colour moves enough).
+    """
     color_change_threshold: int = 12
     brightness_floor: int = 0
     transition_seconds: float = 0.0
@@ -116,6 +128,9 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         inter_light_delay_seconds=float(get_value("INTER_LIGHT_DELAY_SECONDS", "0.4")),
         max_parallel_light_updates=int(get_value("MAX_PARALLEL_LIGHT_UPDATES", "1")),
         color_change_threshold=int(get_value("COLOR_CHANGE_THRESHOLD", "12")),
+        light_update_interval_seconds=float(
+            get_value("LIGHT_UPDATE_INTERVAL_SECONDS", "0.0")
+        ),
         brightness_floor=int(get_value("BRIGHTNESS_FLOOR", "0")),
         transition_seconds=float(get_value("TRANSITION_SECONDS", "0.0")),
         max_pattern_transition_seconds=float(get_value("MAX_PATTERN_TRANSITION_SECONDS", "0.0")),
@@ -266,6 +281,8 @@ def _validate_settings(settings: Settings) -> None:
         raise ValueError("INTER_LIGHT_DELAY_SECONDS cannot be negative")
     if settings.max_parallel_light_updates < 1:
         raise ValueError("MAX_PARALLEL_LIGHT_UPDATES must be at least 1")
+    if settings.light_update_interval_seconds < 0:
+        raise ValueError("LIGHT_UPDATE_INTERVAL_SECONDS must be 0 or greater")
     if settings.color_change_threshold < 0:
         raise ValueError("COLOR_CHANGE_THRESHOLD cannot be negative")
     if not 0 <= settings.brightness_floor <= 255:
