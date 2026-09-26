@@ -8,7 +8,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VENV="$REPO_ROOT/.venv"
+# Outside the checkout -- why is in linux-venv.sh.
+# shellcheck source=linux-venv.sh
+source "$REPO_ROOT/scripts/linux/linux-venv.sh"
+VENV="$MATTERLIGHTS_VENV"
 USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SYSTEM_UNIT_DIR="/etc/systemd/system"
 
@@ -64,6 +67,7 @@ bold "Using $SYSTEM_PYTHON ($("$SYSTEM_PYTHON" -V))"
 # --------------------------------------------------------------------------
 if [[ ! -d "$VENV" ]]; then
     bold "Creating $VENV (--system-site-packages, so it can see PyGObject)"
+    mkdir -p "$(dirname "$VENV")"
     "$SYSTEM_PYTHON" -m venv --system-site-packages "$VENV"
 fi
 "$VENV/bin/python" -m pip install --quiet --upgrade pip
@@ -96,7 +100,11 @@ fi
 install_unit() {   # $1 = source unit, $2 = destination dir, $3 = sudo or empty
     local src="$REPO_ROOT/systemd/$1" dst="$2/$1"
     ${3:+sudo} mkdir -p "$2"
-    sed "s|@INSTALL_DIR@|$REPO_ROOT|g" "$src" | ${3:+sudo} tee "$dst" >/dev/null
+    # Every @PLACEHOLDER@ a unit uses must be filled here; tests/test_linux_venv.py
+    # fails the build when one is not.
+    sed -e "s|@INSTALL_DIR@|$REPO_ROOT|g" \
+        -e "s|@VENV_DIR@|$VENV|g" \
+        "$src" | ${3:+sudo} tee "$dst" >/dev/null
     echo "  installed $dst"
 }
 

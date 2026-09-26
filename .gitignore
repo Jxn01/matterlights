@@ -9,9 +9,8 @@ __pycache__/
 .env
 .env.*
 !.env.example
-.matterlights-control.json
-.matterlights-preview.json
-.matterlights-zones.json
+# Per-OS state beside .env: .matterlights-<kind>.json (legacy) and .matterlights-<kind>.<os>.json
+.matterlights-*.json
 .claude/
 .vscode/
 build/

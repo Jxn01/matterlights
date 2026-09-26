@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
+import sys
 
 from matterlights import paths
 from matterlights.rgb_target import UdpTarget, is_udp, parse_rgb_target
@@ -71,9 +72,36 @@ class Settings:
     log_path: Path | None = None
 
 
+def platform_name(platform: str | None = None) -> str:
+    """``linux`` or ``windows`` -- the suffix of this OS's own config and state files.
+
+    One checkout can serve both halves of a dual boot (the author's is a single
+    tree on an NTFS drive both OSes mount), so everything that differs per OS
+    is kept in files named for the OS rather than in one shared file.
+    """
+
+    platform = platform or sys.platform
+    if platform.startswith("linux"):
+        return "linux"
+    if platform == "win32":
+        return "windows"
+    return platform
+
+
+def overlay_path(dotenv_path: Path, platform: str | None = None) -> Path:
+    """The per-OS overlay read after ``.env``: ``.env.linux`` / ``.env.windows``."""
+
+    return dotenv_path.with_name(f"{dotenv_path.name}.{platform_name(platform)}")
+
+
 def load_settings(*, require_light_entities: bool = True) -> Settings:
     dotenv_path = _resolve_dotenv_path()
+    # Precedence, highest first: the process environment, this OS's overlay
+    # (.env.linux / .env.windows beside .env), .env, the built-in default. An
+    # EMPTY value anywhere means "not set here" and falls through -- so an
+    # overlay line `LOG_PATH=` restores the per-OS default over a .env value.
     env_values = _read_dotenv(dotenv_path)
+    env_values.update(_read_dotenv(overlay_path(dotenv_path)))
     path_base_dir = _settings_base_dir(dotenv_path)
 
     def get_value(name: str, default: str | None = None) -> str:
@@ -187,16 +215,46 @@ def _default_log_path(base_dir: Path | None = None) -> Path:
     return paths.default_log_path()
 
 
+def _default_state_file_path(kind: str, base_dir: Path | None, platform: str | None = None) -> Path:
+    """``.matterlights-<kind>.<os>.json`` beside ``.env`` -- one per OS.
+
+    Zones describe the screen layout and the control and preview files are live
+    state, so none of them may be shared between two OSes using one checkout:
+    a Windows zone layout is meaningless on Linux, and the other way round.
+
+    A file with the pre-2026-09-26 name (``.matterlights-<kind>.json``) is still
+    used when this OS has no file of its own yet, so an existing single-OS
+    install keeps its zones. Before sharing a checkout between two OSes, rename
+    it to the owning OS's name.
+    """
+
+    base = base_dir or Path.cwd()
+    own = base / f".matterlights-{kind}.{platform_name(platform)}.json"
+    legacy = base / f".matterlights-{kind}.json"
+    if not _exists(own) and _exists(legacy):
+        return legacy
+    return own
+
+
+def _exists(path: Path) -> bool:
+    # Path.exists() raises on PermissionError; this runs inside load_settings(),
+    # which must never raise for a path it only computes a default from.
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def _default_zone_file_path(base_dir: Path | None = None) -> Path:
-    return (base_dir or Path.cwd()) / ".matterlights-zones.json"
+    return _default_state_file_path("zones", base_dir)
 
 
 def _default_preview_override_file_path(base_dir: Path | None = None) -> Path:
-    return (base_dir or Path.cwd()) / ".matterlights-preview.json"
+    return _default_state_file_path("preview", base_dir)
 
 
 def _default_control_state_file_path(base_dir: Path | None = None) -> Path:
-    return (base_dir or Path.cwd()) / ".matterlights-control.json"
+    return _default_state_file_path("control", base_dir)
 
 
 def _parse_bool(value: str) -> bool:

@@ -1,6 +1,6 @@
 # MatterLights screen-to-light sync (USER unit).
 #
-# Installed by scripts/linux/install.sh, which substitutes @INSTALL_DIR@.
+# Installed by scripts/linux/install.sh, which substitutes @INSTALL_DIR@ and @VENV_DIR@.
 [Unit]
 Description=MatterLights screen-to-light sync
 Documentation=https://github.com/Jxn01/matterlights
@@ -17,7 +17,8 @@ After=graphical-session.target
 Type=simple
 WorkingDirectory=@INSTALL_DIR@
 Environment=MATTERLIGHTS_ENV_FILE=@INSTALL_DIR@/.env
-ExecStart=@INSTALL_DIR@/.venv/bin/python -m matterlights
+# The venv lives outside the checkout (scripts/linux/linux-venv.sh says why).
+ExecStart=@VENV_DIR@/bin/python -m matterlights
 Restart=on-failure
 RestartSec=5
 

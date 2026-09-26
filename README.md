@@ -134,8 +134,17 @@ with `--system-site-packages` **and from the distribution interpreter** — a ve
 inherits the site-packages of whichever Python created it.
 
 ```bash
-/usr/bin/python3 -m venv --system-site-packages .venv
+/usr/bin/python3 -m venv --system-site-packages ~/.local/share/venvs/matterlights
 ```
+
+The Linux venv lives **outside the checkout** -- `$XDG_DATA_HOME/venvs/matterlights`, usually
+`~/.local/share/venvs/matterlights`; override with `MATTERLIGHTS_VENV`. A checkout may be shared
+with Windows (one tree on a drive both halves of a dual boot mount), and Windows' venv is
+`.venv` in the checkout, where its scheduled tasks run it. A Linux venv in the same place would
+collide with it: one `pyvenv.cfg`, and `lib`/`Lib` differ only in case. `scripts/linux/linux-venv.sh`
+is the one place the location is decided, and `tests/test_linux_venv.py` holds every Linux
+script and unit to it. **Installed before 2026-09-26?** Re-run `scripts/linux/install.sh`, then
+delete the old Linux `.venv` -- the one with a `bin/` directory; a `.venv` with `Scripts/` is Windows'.
 
 **`python3` on your PATH may not be that interpreter.** If you have miniconda,
 pyenv or similar, `python3` is theirs, and a venv built from it has its own
@@ -202,7 +211,7 @@ because a gaming monitor is the only screen anyone wants this program to sync to
 systemctl --user status matterlights-sync
 journalctl --user -u matterlights-sync -f
 systemctl --user restart matterlights-sync
-scripts/linux/uninstall.sh          # removes the units, keeps .env and .venv
+scripts/linux/uninstall.sh          # removes the units, keeps .env and the venv
 ```
 
 ⚠️ **The user units are `PartOf=graphical-session.target`, and that matters.**
@@ -228,7 +237,7 @@ The sync loop is the long-running service that captures the screen and updates y
 .\.venv\Scripts\python.exe -m matterlights     # Windows
 ```
 ```bash
-.venv/bin/python -m matterlights                # Linux
+~/.local/share/venvs/matterlights/bin/python -m matterlights   # Linux
 systemctl --user start matterlights-sync        # or, once installed
 ```
 
@@ -271,7 +280,7 @@ Manual start:
 powershell -ExecutionPolicy Bypass -File .\scripts\start-zone-ui.ps1   # Windows
 ```
 ```bash
-.venv/bin/python -m matterlights.zone_ui                                # Linux
+~/.local/share/venvs/matterlights/bin/python -m matterlights.zone_ui   # Linux
 ```
 
 On Linux the dashboard starts the zone designer as a transient systemd unit
@@ -463,33 +472,81 @@ Neither task has a time limit. Task Scheduler's default stops a task 72 hours af
 
 ## Configuration
 
-The app reads `.env` first and falls back to shell environment variables. The most important settings are:
+Settings come from four places. Highest precedence first:
 
-| Variable | Purpose |
-| --- | --- |
-| `HA_URL` | Base URL of Home Assistant. |
-| `HA_TOKEN` | Home Assistant long-lived access token. |
-| `HA_LIGHT_ENTITIES` | Comma-separated list of light entities to control. |
-| `LIGHT_ZONE_LAYOUT` | Ordered zone names matched to `HA_LIGHT_ENTITIES`. |
-| `CONTROL_STATE_FILE` | Where the playback mode (autonomous/custom) and pattern are stored. |
-| `RESPECT_DISPLAY_SLEEP` | `true` to turn lights off when the monitor sleeps. |
-| `TURN_OFF_ON_SHUTDOWN` | `true` to turn lights off when Windows shuts down, restarts, or logs off. |
-| `SESSION_END_TIMEOUT_SECONDS` | How long the session-end turn-off waits for Home Assistant. Longer than `REQUEST_TIMEOUT_SECONDS` because it gets one attempt and no retry. Default `10.0`. |
-| `HEARTBEAT_ENTITY_ID` | Entity the sync loop refreshes so Home Assistant can notice the PC is gone. Empty disables it. Default `sensor.matterlights_heartbeat`. |
-| `HEARTBEAT_INTERVAL_SECONDS` | How often the heartbeat is refreshed. Default `30.0`. |
-| `MAX_PATTERN_TRANSITION_SECONDS` | Caps custom pattern fades; `0` snaps (safe for Matter bulbs that freeze on transitions). |
-| `COLOR_SYNC_MODE` | `ambience` (recommended), `zoned`, or `shared-variant`. |
-| `AMBIENCE_NEAR_LIGHTS` | Entity IDs of the bulbs beside the screen (ambience mode's near group). |
-| `PRIMARY_LIGHT_ZONE_NAMES` | Primary bulbs used in shared-variant mode. |
-| `SCREEN_CAPTURE_TARGET` | Default screen: `primary`, `all`, or a 1-based monitor index. Overridable live from the dashboard. **Indices are per-OS and unrelated**: Windows numbers them in `mss` enumeration order, Linux sorts Mutter's logical monitors by position. Ignored on the portal capture path, where the user picks the screen in the consent dialog. |
-| `SYNC_INTERVAL_SECONDS` | Capture cadence. Lower is faster and heavier. |
-| `MAX_PARALLEL_LIGHT_UPDATES` | Upper bound for concurrent Home Assistant light updates. |
-| `BRIGHTNESS_FLOOR` | Minimum brightness on active updates. |
-| `COLOR_BOOST` | Saturation multiplier applied after sampling. |
-| `DARK_THRESHOLD` | Threshold below which lights can turn off. |
-| `ZONE_UI_PORT` | Local port for the zone designer. |
-| `DASHBOARD_PORT` | Local port for the management dashboard. |
-| `LOG_PATH` | Optional log file path. Defaults per-OS: `%LOCALAPPDATA%\matterlights\matterlights.log` on Windows, `$XDG_STATE_HOME/matterlights/matterlights.log` (usually `~/.local/state/matterlights/`) on Linux. Leave it empty in a shared `.env` so it resolves correctly on each. |
+1. **the process environment** -- a variable set in the shell or a unit's `Environment=`;
+2. **this OS's overlay**, `.env.linux` or `.env.windows`, beside `.env`;
+3. **`.env`**;
+4. the built-in default below.
+
+An **empty value means "not set here"** and falls through to the next source -- so `LOG_PATH=`
+in an overlay restores the per-OS default over a `.env` that names another OS's path.
+`.env` is found at `MATTERLIGHTS_ENV_FILE` if that is set (the systemd units set it), else in
+the working directory, else in the checkout. Relative paths in any setting resolve from the
+directory `.env` is in.
+
+### One checkout, two OSes
+
+A checkout can serve both halves of a dual boot -- the author's is one tree on an NTFS drive
+that Windows and Linux both mount. Everything that differs per OS is then kept apart by name:
+
+| What | Shared | Per OS |
+| --- | --- | --- |
+| Settings | `.env` -- the token, the bulbs, the zones, everything common | `.env.linux` / `.env.windows` -- e.g. `RGB_PUBLISH_SOCKET` (a unix socket on Linux, `udp://127.0.0.1:45731` on Windows), `LOG_PATH`, `SYNC_INTERVAL_SECONDS`, `SAMPLE_STRIDE` |
+| Zone layout, preview override, playback state | -- | `.matterlights-zones.<os>.json`, `.matterlights-preview.<os>.json`, `.matterlights-control.<os>.json` (a screen layout means nothing on the other OS) |
+| Virtualenv | -- | Windows: `.venv` in the checkout. Linux: outside it, `~/.local/share/venvs/matterlights` (see Linux setup) |
+| Log, portal restore token | -- | the OS's state directory (see `LOG_PATH`) |
+
+`<os>` is `linux` or `windows`. A state file with the older, OS-less name
+(`.matterlights-zones.json`) is still used while the OS has no file of its own, so a single-OS
+install keeps working; before sharing a checkout between OSes, rename it to its owner's name.
+All of these files are gitignored (`.env.*`, `.matterlights-*.json`), and
+`tests/test_config.py` fails the build if one stops being.
+
+### Every setting
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HA_URL` | `http://192.168.10.2:8123` | Base URL of Home Assistant. |
+| `HA_TOKEN` | *(required)* | Home Assistant long-lived access token. |
+| `HA_LIGHT_ENTITIES` | *(required by the sync loop; `discover` runs without it)* | Comma-separated list of light entities to control. |
+| `LIGHT_ZONE_LAYOUT` | empty | Ordered zone names matched one-to-one to `HA_LIGHT_ENTITIES`. |
+| `LIGHT_ZONE_FILE` | `.matterlights-zones.<os>.json` beside `.env` | The zone designer's saved layout. |
+| `PREVIEW_OVERRIDE_FILE` | `.matterlights-preview.<os>.json` beside `.env` | The zone designer's live preview override. |
+| `CONTROL_STATE_FILE` | `.matterlights-control.<os>.json` beside `.env` | Where the playback mode (autonomous/custom) and pattern are stored. |
+| `RESPECT_DISPLAY_SLEEP` | `true` | `true` to turn the lights off when the monitor sleeps. |
+| `TURN_OFF_ON_SHUTDOWN` | `true` | `true` to turn the lights off at shutdown, restart or logoff. |
+| `RGB_EXTENSION_ENABLED` | `false` | Publish frames to the local RGB extension (ambience-rgb). Off: nothing is published and the dashboard hides the RGB control. |
+| `RGB_PUBLISH_SOCKET` | empty | Where to publish: a unix datagram socket path (Linux), or `udp://127.0.0.1:PORT` (Windows, which has no unix datagram sockets). A per-OS value -- put it in the overlay. |
+| `HEARTBEAT_ENTITY_ID` | `sensor.matterlights_heartbeat` | Entity the sync loop refreshes so Home Assistant can notice the PC is gone (crash, hard reset, power cut). Empty disables it. |
+| `HEARTBEAT_INTERVAL_SECONDS` | `30.0` | How often the heartbeat is refreshed. |
+| `COLOR_SYNC_MODE` | `zoned` | `ambience` (recommended), `zoned`, or `shared-variant`. |
+| `PRIMARY_LIGHT_ZONE_NAMES` | `top-center,bottom-left` | Primary bulbs used in shared-variant mode. |
+| `AMBIENCE_NEAR_LIGHTS` | empty | Entity IDs of the bulbs beside the screen (ambience mode's near group). |
+| `ZONE_UI_PORT` | `8765` | Local port for the zone designer. |
+| `DASHBOARD_PORT` | `8770` | Local port for the management dashboard. |
+| `SCREEN_CAPTURE_TARGET` | `primary` | Default screen: `primary`, `all`, or a 1-based monitor index. Overridable live from the dashboard. **Indices are per-OS and unrelated**: Windows numbers them in `mss` enumeration order, Linux sorts Mutter's logical monitors by position. Ignored on the portal capture path, where the user picks the screen in the consent dialog. |
+| `REQUEST_TIMEOUT_SECONDS` | `3.0` | Timeout of each Home Assistant request from the sync loop. |
+| `SESSION_END_TIMEOUT_SECONDS` | `10.0` | How long the session-end turn-off waits for Home Assistant. Longer than `REQUEST_TIMEOUT_SECONDS` because it gets one attempt and no retry. |
+| `AVAILABILITY_REFRESH_SECONDS` | `5.0` | How often the sync loop re-reads which bulbs Home Assistant reports available. |
+| `SYNC_INTERVAL_SECONDS` | `0.2` | Capture cadence. Lower is faster and heavier. |
+| `INTER_LIGHT_DELAY_SECONDS` | `0.4` | Pause between consecutive bulb updates within one batch. |
+| `MAX_PARALLEL_LIGHT_UPDATES` | `1` | Upper bound for concurrent Home Assistant light updates. |
+| `COLOR_CHANGE_THRESHOLD` | `12` | How far a colour must move before a bulb is sent it again. |
+| `LIGHT_UPDATE_INTERVAL_SECONDS` | `0.0` | Minimum gap between Home Assistant writes, independent of the sync rate -- lets the RGB extension run fast without asking Matter bulbs for more than they can take. `0.0` writes whenever the colour moves enough. |
+| `BRIGHTNESS_FLOOR` | `0` | Minimum brightness on active updates. |
+| `TRANSITION_SECONDS` | `0.0` | Transition sent with sync-loop updates and turn-offs. |
+| `MAX_PATTERN_TRANSITION_SECONDS` | `0.0` | Caps custom pattern fades; `0` snaps (safe for Matter bulbs that freeze on transitions). |
+| `DARK_THRESHOLD` | `12` | Average brightness at or below which the screen counts as dark. |
+| `DARK_ACTIVE_RATIO_THRESHOLD` | `0.05` | Share of non-dark pixels at or below which a dark screen turns the lights off. |
+| `COLOR_BOOST` | `1.15` | Saturation multiplier applied after sampling. |
+| `SAMPLE_STRIDE` | `24` | Pixel stride when sampling a frame: higher is cheaper and coarser. |
+| `ERROR_RETRY_SECONDS` | `5.0` | Back-off after a batch of bulb updates fails. |
+| `LOG_PATH` | per-OS state dir | Log file. Defaults per-OS: `%LOCALAPPDATA%\matterlights\matterlights.log` on Windows, `$XDG_STATE_HOME/matterlights/matterlights.log` (usually `~/.local/state/matterlights/`) on Linux. `none`, `off` or `-` log to stdout only. Keep an explicit path in the OS's overlay, not in a shared `.env`. |
+| `MATTERLIGHTS_ENV_FILE` | *(environment only)* | Path of `.env`; its overlay is read from beside it. Set by the systemd units. |
+
+`tests/test_readme_settings.py` fails the build when `config.py` reads a setting this table
+does not list.
 
 Recognized zone names:
 
@@ -736,10 +793,16 @@ With PowerShell 7 on `PATH`, or `MATTERLIGHTS_PWSH` pointing at a `pwsh` anywher
 On Linux:
 
 ```bash
-/usr/bin/python3 -m venv --system-site-packages .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m unittest discover -s tests -v
+VENV=~/.local/share/venvs/matterlights   # outside the checkout -- see Linux setup
+/usr/bin/python3 -m venv --system-site-packages "$VENV"
+"$VENV/bin/python" -m pip install -e .
+"$VENV/bin/python" -m unittest discover -s tests -v
 ```
+
+The same suite runs on **Windows CPython under Wine**, from Linux, with nothing installed:
+`scripts/linux/test-under-wine.sh` (python.org's embeddable 3.12.10 plus Windows wheels, in
+`~/.cache/matterlights-wine`). There `sys.platform` is `win32`, so the Windows code paths and the
+`.env.windows` overlay really run; DXGI and user32 are Wine's, so a pass is a good sign, not proof.
 
 Platform-specific tests skip on the other OS rather than failing, so the suite
 is green on both. One test earns special mention:

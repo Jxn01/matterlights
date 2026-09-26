@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Remove the systemd units. Leaves the checkout, the venv and .env alone.
+# Remove the systemd units. Leaves the checkout, the venv (outside it, see linux-venv.sh) and .env alone.
 #
 set -euo pipefail
 
@@ -21,4 +21,4 @@ if [[ -f /etc/systemd/system/matterlights-lights-off.service ]]; then
     sudo systemctl daemon-reload
 fi
 
-echo "Done. The checkout, .venv and .env are untouched."
+echo "Done. The checkout, the venv and .env are untouched."
