@@ -497,6 +497,11 @@ that Windows and Linux both mount. Everything that differs per OS is then kept a
 | Virtualenv | -- | Windows: `.venv` in the checkout. Linux: outside it, `~/.local/share/venvs/matterlights` (see Linux setup) |
 | Log, portal restore token | -- | the OS's state directory (see `LOG_PATH`) |
 
+**Never set `LIGHT_ZONE_FILE`, `PREVIEW_OVERRIDE_FILE` or `CONTROL_STATE_FILE` in a shared
+`.env`** -- an explicit value beats the per-OS default, so both OSes would read and overwrite
+the same file. Set one only in an overlay. (`.env.example` shipped all three pinned to the old
+OS-less names until 2026-09-26; delete those lines from a `.env` made from it.)
+
 `<os>` is `linux` or `windows`. A state file with the older, OS-less name
 (`.matterlights-zones.json`) is still used while the OS has no file of its own, so a single-OS
 install keeps working; before sharing a checkout between OSes, rename it to its owner's name.

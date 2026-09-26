@@ -228,6 +228,31 @@ class PerOsConfigTests(unittest.TestCase):
         self.assertEqual(settings.light_zone_file, base / own)
 
 
+class ExampleEnvKeepsStateFilesPerOsTests(unittest.TestCase):
+    """🚨 .env.example pinned all three state files to one shared name, so every
+    install made from it defeated the per-OS defaults -- on a shared checkout,
+    both OSes then read and overwrote one zone layout."""
+
+    STATE_KEYS = ("LIGHT_ZONE_FILE", "PREVIEW_OVERRIDE_FILE", "CONTROL_STATE_FILE")
+
+    def settings_in(self, text: str) -> set[str]:
+        return {
+            line.split("=", 1)[0].strip()
+            for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#") and "=" in line
+        }
+
+    def test_the_example_leaves_state_files_to_their_per_os_defaults(self) -> None:
+        example = (Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+        self.assertEqual(self.settings_in(example) & set(self.STATE_KEYS), set())
+
+    def test_the_check_sees_a_pinned_state_file(self) -> None:
+        """Positive control."""
+
+        self.assertIn("LIGHT_ZONE_FILE", self.settings_in("HA_TOKEN=x\nLIGHT_ZONE_FILE=.z.json\n# CONTROL_STATE_FILE=c"))
+        self.assertNotIn("CONTROL_STATE_FILE", self.settings_in("# CONTROL_STATE_FILE=c"))
+
+
 @unittest.skipUnless(shutil.which("git"), "needs git")
 class PerOsFilesAreIgnoredTests(unittest.TestCase):
     """The overlays hold HA_TOKEN-adjacent config and the state files hold local state."""
