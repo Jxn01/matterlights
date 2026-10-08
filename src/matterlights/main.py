@@ -15,6 +15,7 @@ from matterlights.ambience import (
 from matterlights import capture as _capture
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
+from matterlights.ha_switches import start_switch_mirror
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
 from matterlights.light_worker import LightWorker
 from matterlights.logging_setup import configure_logging
@@ -183,6 +184,9 @@ def main() -> int:
 
     # Home Assistant writes run here, never on the capture loop: see light_worker.
     light_worker = LightWorker(client, LOGGER)
+    # The dashboard's Lights/RGB switches, mirrored to Home Assistant helpers on
+    # a thread of their own. None unless HA_*_SWITCH_ENTITY is set.
+    switch_mirror = start_switch_mirror(settings, client, LOGGER)
 
     def reset_runtime_caches() -> None:
         last_colors.clear()
@@ -281,7 +285,7 @@ def main() -> int:
                     if master_off_active and control_state.lights_on:
                         master_off_active = False
                         reset_runtime_caches()
-                        LOGGER.info("Lights switched on from the dashboard; resuming")
+                        LOGGER.info("Lights switched on (dashboard or Home Assistant); resuming")
 
                     ordered_available = [
                         entity_id for entity_id in settings.light_entities if entity_id in available_entity_ids
@@ -294,7 +298,7 @@ def main() -> int:
                             master_off_active = True
                             master_off_confirmed.clear()
                             reset_runtime_caches()
-                            LOGGER.info("Lights switched off from the dashboard")
+                            LOGGER.info("Lights switched off (dashboard or Home Assistant)")
                         # Sweep on entry, then only when availability changes --
                         # which is the only moment ordered_available can differ.
                         if just_entered or availability_refreshed:
@@ -581,6 +585,8 @@ def main() -> int:
         # colour write cannot land after the lights-out request and leave a lamp
         # lit for the night.
         light_worker.stop()
+        if switch_mirror is not None:
+            switch_mirror.stop()
         if display_monitor is not None:
             display_monitor.stop()
         if shutdown_hook is not None:

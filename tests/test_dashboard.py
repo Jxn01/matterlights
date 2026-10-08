@@ -95,6 +95,59 @@ class ControlEndpointTests(unittest.TestCase):
                 client.post("/api/control", json=body)
                 self.assertTrue(client.get("/api/control").get_json()["lightsOn"])
 
+    def test_a_post_without_the_switches_leaves_them_as_they_are(self) -> None:
+        """The switches also change from Home Assistant (ha_switches).
+
+        The page used to post its whole in-memory state, so a mode change made
+        with a stale copy of `lightsOn` switched the lamps back on behind Home
+        Assistant's back. The server now merges what is posted onto its file.
+        """
+
+        with TemporaryDirectory() as temp_dir:
+            env_path = self._env(temp_dir)
+            with patch.dict(os.environ, {"MATTERLIGHTS_ENV_FILE": str(env_path)}, clear=False):
+                client = dashboard.APP.test_client()
+                client.post("/api/control", json={"lightsOn": False, "rgbOn": False})
+                body = {"mode": "custom", "custom": {"type": "solid"}}
+                self.assertEqual(client.post("/api/control", json=body).status_code, 200)
+
+                payload = client.get("/api/control").get_json()
+                self.assertEqual(payload["mode"], "custom")
+                self.assertFalse(payload["lightsOn"])
+                self.assertFalse(payload["rgbOn"])
+
+    def test_a_switch_post_leaves_mode_and_pattern_alone(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            env_path = self._env(temp_dir)
+            with patch.dict(os.environ, {"MATTERLIGHTS_ENV_FILE": str(env_path)}, clear=False):
+                client = dashboard.APP.test_client()
+                client.post("/api/control", json={"mode": "custom", "captureTarget": "1", "custom": {"type": "solid"}})
+                self.assertEqual(client.post("/api/control", json={"rgbOn": False}).status_code, 200)
+
+                payload = client.get("/api/control").get_json()
+                self.assertEqual((payload["mode"], payload["captureTarget"]), ("custom", "1"))
+                self.assertFalse(payload["rgbOn"])
+                self.assertTrue(payload["lightsOn"])
+
+    def test_a_non_object_body_is_rejected(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            env_path = self._env(temp_dir)
+            with patch.dict(os.environ, {"MATTERLIGHTS_ENV_FILE": str(env_path)}, clear=False):
+                self.assertEqual(dashboard.APP.test_client().post("/api/control", json=[1]).status_code, 400)
+
+    def test_the_page_never_posts_the_switches_with_other_edits(self) -> None:
+        """Guard for the client half of the merge: Apply and the screen picker
+        must not carry `lightsOn`/`rgbOn`, and the page must re-read them."""
+
+        page = dashboard._page_html(rgb_enabled=True)
+        body = page[page.index("function buildControlBody()"):page.index("async function postControl(")]
+        self.assertIn("captureTarget", body, "positive control: the slice is the body builder")
+        self.assertNotIn("lightsOn", body)
+        self.assertNotIn("rgbOn", body)
+        self.assertIn("postControl({ lightsOn: control.lightsOn })", page)
+        self.assertIn("postControl({ rgbOn: control.rgbOn })", page)
+        self.assertIn("refreshSwitches()", page)
+
     def test_selecting_a_missing_screen_returns_400(self) -> None:
         with TemporaryDirectory() as temp_dir:
             env_path = self._env(temp_dir)

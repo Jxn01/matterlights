@@ -115,6 +115,50 @@ class HomeAssistantClient:
             LOGGER.debug("Failed to post heartbeat: %s", _concise_request_error(exc))
             return False
 
+    def get_switch_state(self, entity_id: str) -> bool | None:
+        """Read an on/off entity: ``True``, ``False``, or ``None`` for no reading.
+
+        ``None`` covers Home Assistant being unreachable, the entity missing
+        (404) and the states ``unknown``/``unavailable``. None of those is
+        "off" -- reading them as off would switch the lights off every time
+        Home Assistant restarts.
+        """
+
+        try:
+            with self._get_session().get(
+                f"{self.base_url}/api/states/{entity_id}",
+                timeout=self.timeout_seconds,
+            ) as response:
+                if response.status_code == 404:
+                    return None
+                response.raise_for_status()
+                state = response.json().get("state")
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            LOGGER.debug("Failed to read %s: %s", entity_id, exc)
+            return None
+        return {"on": True, "off": False}.get(state)
+
+    def set_switch_state(self, entity_id: str, on: bool) -> bool:
+        """Switch an on/off entity, reporting whether Home Assistant accepted it.
+
+        ``homeassistant.turn_on``/``turn_off`` rather than the entity's own
+        domain, so the setting can name an ``input_boolean``, a ``switch`` or
+        anything else that turns on and off.
+        """
+
+        service = "turn_on" if on else "turn_off"
+        try:
+            with self._get_session().post(
+                f"{self.base_url}/api/services/homeassistant/{service}",
+                json={"entity_id": entity_id},
+                timeout=self.timeout_seconds,
+            ) as response:
+                response.raise_for_status()
+            return True
+        except requests.RequestException as exc:
+            LOGGER.warning("Failed to switch %s %s: %s", entity_id, "on" if on else "off", _concise_request_error(exc))
+            return False
+
     def set_lights(
         self,
         entity_ids: list[str],

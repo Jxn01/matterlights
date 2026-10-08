@@ -32,6 +32,11 @@ class Settings:
     # Windows never reports -- crash, hard reset, power cut. Empty disables it.
     heartbeat_entity_id: str = "sensor.matterlights_heartbeat"
     heartbeat_interval_seconds: float = 30.0
+    # Home Assistant mirrors of the dashboard's Lights and RGB switches (see
+    # matterlights.ha_switches). Empty -- the default -- mirrors nothing.
+    ha_lights_switch_entity: str = ""
+    ha_rgb_switch_entity: str = ""
+    ha_switch_poll_seconds: float = 1.0
     color_sync_mode: str = "zoned"
     primary_light_zone_names: list[str] = field(default_factory=list)
     ambience_near_lights: list[str] = field(default_factory=list)
@@ -142,6 +147,9 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         rgb_publish_socket=_parse_rgb_target(get_value("RGB_PUBLISH_SOCKET", ""), path_base_dir),
         heartbeat_entity_id=get_value("HEARTBEAT_ENTITY_ID", "sensor.matterlights_heartbeat").strip(),
         heartbeat_interval_seconds=float(get_value("HEARTBEAT_INTERVAL_SECONDS", "30.0")),
+        ha_lights_switch_entity=get_value("HA_LIGHTS_SWITCH_ENTITY", "").strip(),
+        ha_rgb_switch_entity=get_value("HA_RGB_SWITCH_ENTITY", "").strip(),
+        ha_switch_poll_seconds=float(get_value("HA_SWITCH_POLL_SECONDS", "1.0")),
         color_sync_mode=get_value("COLOR_SYNC_MODE", "zoned").strip().lower(),
         primary_light_zone_names=_parse_light_zone_layout(
             get_value("PRIMARY_LIGHT_ZONE_NAMES", "top-center,bottom-left")
@@ -345,6 +353,14 @@ def _validate_settings(settings: Settings) -> None:
         raise ValueError("DASHBOARD_PORT must be between 1 and 65535")
     if settings.request_timeout_seconds <= 0:
         raise ValueError("REQUEST_TIMEOUT_SECONDS must be greater than 0")
+    for name, entity_id in (
+        ("HA_LIGHTS_SWITCH_ENTITY", settings.ha_lights_switch_entity),
+        ("HA_RGB_SWITCH_ENTITY", settings.ha_rgb_switch_entity),
+    ):
+        if entity_id and "." not in entity_id:
+            raise ValueError(f"{name} must be an entity ID such as input_boolean.example, got {entity_id!r}")
+    if settings.ha_switch_poll_seconds <= 0:
+        raise ValueError("HA_SWITCH_POLL_SECONDS must be greater than 0")
     if settings.availability_refresh_seconds <= 0:
         raise ValueError("AVAILABILITY_REFRESH_SECONDS must be greater than 0")
     if settings.sync_interval_seconds <= 0:

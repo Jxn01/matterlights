@@ -20,9 +20,13 @@ keyframe boundary rather than streaming intermediate frames.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import contextlib
+from dataclasses import dataclass, field, replace
 import json
+import os
 from pathlib import Path
+import tempfile
+import time
 
 from matterlights.home_assistant import LightUpdate
 from matterlights.screen import RgbColor
@@ -282,8 +286,61 @@ def load_control_state(path: Path | None) -> ControlState:
 
 
 def save_control_state(path: Path, state: ControlState) -> None:
+    """Write the control state atomically.
+
+    Two processes write this file -- the dashboard and the sync loop's Home
+    Assistant switch mirror -- and the sync loop reads it whenever its mtime
+    moves. ``write_text`` truncates first, so a reader could catch it empty or
+    half-written, and ``load_control_state`` reads a broken file as the
+    *default* state: autonomous mode, lights on. Writing beside it and renaming
+    over it means a reader sees the old file or the new one, never a torn one.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(control_state_to_payload(state), indent=2), encoding="utf-8")
+    text = json.dumps(control_state_to_payload(state), indent=2)
+    fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        _replace_with_retry(Path(temp_name), path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temp_name)
+        raise
+
+
+def _replace_with_retry(source: Path, target: Path, attempts: int = 20) -> None:
+    # Windows refuses to rename over a file another process has open -- Python
+    # opens files without FILE_SHARE_DELETE -- and the sync loop reads this one
+    # often. Its reads take microseconds, so a short retry always gets through.
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05)
+
+
+SWITCH_FIELDS = ("lights_on", "rgb_on")
+"""The control state's two master switches -- the ones Home Assistant mirrors."""
+
+
+def update_control_switches(path: Path, values: dict[str, bool]) -> ControlState:
+    """Set only the master switches, leaving every other field as it is on disk.
+
+    The file is read here, at write time, never taken from a copy held earlier:
+    a mode or pattern saved from the dashboard in between would otherwise be
+    rolled back by a switch that has nothing to do with it.
+    """
+
+    unknown = set(values) - set(SWITCH_FIELDS)
+    if unknown:
+        raise ValueError(f"not a control switch: {', '.join(sorted(unknown))}")
+    state = replace(load_control_state(path), **{name: bool(value) for name, value in values.items()})
+    save_control_state(path, state)
+    return state
 
 
 def control_state_to_payload(state: ControlState) -> dict:

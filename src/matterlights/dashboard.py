@@ -159,8 +159,16 @@ def set_control() -> tuple[Response, int] | Response:
         return jsonify({"ok": False, "message": "CONTROL_STATE_FILE is not configured"}), 400
 
     payload = request.get_json(force=True, silent=False)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "message": "Expected a JSON object"}), 400
+    # Merged onto the file, never applied whole: the Lights/RGB switches also
+    # change from Home Assistant (matterlights.ha_switches), so a page posting
+    # its own -- possibly stale -- copy of them would switch the lamps back on
+    # behind Home Assistant's back. The page sends only what it changes.
+    merged = control_state_to_payload(load_control_state(settings.control_state_file))
+    merged.update(payload)
     try:
-        state = control_state_from_payload(payload)
+        state = control_state_from_payload(merged)
     except ValueError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
 
@@ -1361,12 +1369,13 @@ def _page_html(rgb_enabled: bool = False) -> str:
       }
     }
 
+    // The Lights/RGB switches are deliberately absent: they also change from
+    // Home Assistant, and the server merges what is posted onto its file, so
+    // leaving them out is what stops a stale copy here undoing a switch there.
     function buildControlBody() {
       return {
         mode: control.mode,
         captureTarget: control.captureTarget,
-        lightsOn: control.lightsOn,
-        rgbOn: control.rgbOn,
         custom: {
           type: control.custom.type,
           brightness: control.custom.brightness,
@@ -1388,14 +1397,26 @@ def _page_html(rgb_enabled: bool = False) -> str:
       };
     }
 
-    async function postControl() {
+    async function postControl(body) {
       const payload = await fetchJson('/api/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildControlBody()),
+        body: JSON.stringify(body || buildControlBody()),
       });
       await loadStatus();
       return payload;
+    }
+
+    // The switches can be flipped from Home Assistant too, so re-read them.
+    // Patches the two fields and the two buttons only -- reassigning `control`
+    // would throw away unsaved edits in the pattern editor.
+    async function refreshSwitches() {
+      if (!control) return;
+      const payload = await fetchJson('/api/control');
+      control.lightsOn = payload.lightsOn !== false;
+      control.rgbOn = payload.rgbOn !== false;
+      renderPowerToggle();
+      renderRgbToggle();
     }
 
     async function applyControl() {
@@ -1426,7 +1447,7 @@ def _page_html(rgb_enabled: bool = False) -> str:
       renderRgbToggle();
       statusBar.textContent = control.lightsOn ? 'Switching lights on…' : 'Switching lights off…';
       try {
-        await postControl();
+        await postControl({ lightsOn: control.lightsOn });
         statusBar.textContent = control.lightsOn
           ? 'Lights on — resuming playback.'
           : 'Lights off — stays off (even across reboots) until switched back on.';
@@ -1460,7 +1481,7 @@ def _page_html(rgb_enabled: bool = False) -> str:
         renderRgbToggle();
         statusBar.textContent = control.rgbOn ? 'Switching RGB on…' : 'Switching RGB off…';
         try {
-          await postControl();
+          await postControl({ rgbOn: control.rgbOn });
           statusBar.textContent = control.rgbOn
             ? 'RGB on — case lighting follows the screen.'
             : 'RGB off — case lighting stays dark until switched back on.';
@@ -1580,6 +1601,11 @@ def _page_html(rgb_enabled: bool = False) -> str:
         statusBar.textContent = error.message;
       });
     }, 5000);
+    setInterval(() => {
+      refreshSwitches().catch((error) => {
+        statusBar.textContent = error.message;
+      });
+    }, 2000);
     setInterval(() => {
       loadLogs().catch((error) => {
         statusBar.textContent = error.message;

@@ -251,6 +251,15 @@ The dashboard shows:
 - active configuration summary
 - recent log output
 - controls for starting, stopping, and restarting the sync loop or zone designer
+- the **Lights** master switch and, with the RGB extension enabled, the **RGB** switch -- both
+  also switchable from Home Assistant (see [Home Assistant switches](#home-assistant-switches));
+  the page re-reads them every 2 seconds
+
+`POST /api/control` **merges** the posted JSON onto the control file rather than replacing it:
+fields the body leaves out keep their current values. The page relies on that -- each switch
+posts only its own key (`{"lightsOn": false}`), and **Apply** and the screen picker never send
+`lightsOn`/`rgbOn` -- so a page holding a stale copy of a switch cannot undo a change made in
+Home Assistant. The body must be a JSON object (anything else is a 400).
 
 ⚠️ **On Windows, "Restart" waits for the task to actually stop before starting it.**
 `Stop-ScheduledTask` is asynchronous — it signals termination and returns while the
@@ -446,6 +455,44 @@ action:
       entity_id: <your HA_LIGHT_ENTITIES>
 ```
 
+### Home Assistant switches
+
+The dashboard's **Lights** and **RGB** switches can also live in Home Assistant, as two on/off
+helpers (`input_boolean`) that the sync loop keeps equal to the control file in both directions.
+Set either or both of:
+
+```ini
+HA_LIGHTS_SWITCH_ENTITY=input_boolean.matterlights_lights
+HA_RGB_SWITCH_ENTITY=input_boolean.matterlights_rgb
+```
+
+Create the helpers in Home Assistant first (Settings → Devices & services → Helpers → Toggle).
+Any entity that turns on and off works -- the mirror calls `homeassistant.turn_on`/`turn_off`, not
+`input_boolean.*` -- but a helper is the natural fit.
+
+How it behaves (`src/matterlights/ha_switches.py`):
+
+- **The first successful reading wins for Home Assistant.** The control file is per OS while the
+  helper is shared, so whichever half of a dual-boot machine starts follows the switch as it was
+  last left -- by the other OS, in Home Assistant, or from a phone while the PC was off.
+  🚨 **A new `input_boolean` starts `off`.** Set both helpers to the state you want *before* the
+  sync loop first sees them, or the first reading switches the lamps and the RGB off.
+- After that, **whichever side moved since the last agreed value is copied to the other**:
+  a dashboard click is pushed to Home Assistant, a Home Assistant change is written into the
+  control file (the `lightsOn`/`rgbOn` keys only, read fresh at write time, so a mode or pattern
+  saved in between is never rolled back). Nothing is echoed back. If both sides moved they moved
+  to the same value -- a switch is a boolean -- so there is nothing to resolve.
+- **No reading is not "off".** Home Assistant unreachable, the entity missing (404), `unknown` or
+  `unavailable`: the switch is left as it is, a warning is logged once, and the mirror retries.
+  The first *real* reading still counts as the first contact.
+- A push Home Assistant refuses is retried on the next poll; the local switch keeps its value.
+- It polls every `HA_SWITCH_POLL_SECONDS` (default 1 s) on a thread of its own, never on the
+  capture loop, so a slow Home Assistant cannot stall screen capture.
+- The heartbeat fallback above is independent of it: it turns the bulbs off when the PC goes
+  away but never touches the helpers, so they keep saying what you want when the PC returns.
+
+Both empty (the default) mirrors nothing and starts no thread.
+
 ## Windows autostart
 
 
@@ -525,6 +572,9 @@ All of these files are gitignored (`.env.*`, `.matterlights-*.json`), and
 | `RGB_PUBLISH_SOCKET` | empty | Where to publish: a unix datagram socket path (Linux), or `udp://127.0.0.1:PORT` (Windows, which has no unix datagram sockets). A per-OS value -- put it in the overlay. |
 | `HEARTBEAT_ENTITY_ID` | `sensor.matterlights_heartbeat` | Entity the sync loop refreshes so Home Assistant can notice the PC is gone (crash, hard reset, power cut). Empty disables it. |
 | `HEARTBEAT_INTERVAL_SECONDS` | `30.0` | How often the heartbeat is refreshed. |
+| `HA_LIGHTS_SWITCH_ENTITY` | *(empty: not mirrored)* | On/off entity in Home Assistant kept equal to the dashboard's **Lights** switch, both ways. Must be an entity ID (`domain.name`). See [Home Assistant switches](#home-assistant-switches). |
+| `HA_RGB_SWITCH_ENTITY` | *(empty: not mirrored)* | Same, for the **RGB** switch. |
+| `HA_SWITCH_POLL_SECONDS` | `1.0` | How often the switch mirror polls Home Assistant and the control file. Must be greater than 0. |
 | `COLOR_SYNC_MODE` | `zoned` | `ambience` (recommended), `zoned`, or `shared-variant`. |
 | `PRIMARY_LIGHT_ZONE_NAMES` | `top-center,bottom-left` | Primary bulbs used in shared-variant mode. |
 | `AMBIENCE_NEAR_LIGHTS` | empty | Entity IDs of the bulbs beside the screen (ambience mode's near group). |
@@ -826,6 +876,7 @@ src/matterlights/        Python package
   shutdown_hook/         session-end detection, per platform
   service_control/       start/stop/status: Task Scheduler or systemd
   screen.py              the color and zone engine — platform-free
+  ha_switches.py         the Lights/RGB switches mirrored to Home Assistant, both ways
 scripts/                 Windows setup and runtime helpers
 scripts/linux/           Linux installer and uninstaller
 systemd/                 unit files (@INSTALL_DIR@ is substituted at install time)
