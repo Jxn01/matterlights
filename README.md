@@ -806,6 +806,34 @@ The sync loop's unit is probably not tied to the graphical session. Check that
 `systemctl --user cat matterlights-sync` shows `PartOf=graphical-session.target`.
 With lingering enabled and that line missing, the unit survives logout.
 
+### Windows: the lights go black in an exclusive-fullscreen game (open, 2026-10-26)
+
+**What is known.** Warframe, 2026-10-25, with the lamps switched off and the case/soundbar following the screen:
+**borderless fullscreen kept the lights in sync, exclusive fullscreen turned them all black** (the owner switched
+the game's display mode back and forth). The log of that session shows no capture error and no Desktop Duplication
+access loss during play, so the capture either delivered **black frames** or **no new frames** (dxcam then returns
+nothing and the last frame is reused). The log cannot say which: the RGB-only path (the one that runs while the
+lamps are switched off) decided "screen dark" without a log line and swallowed capture failures at DEBUG.
+
+**What the code does since.** Logging and one defensive step, nothing that claims to be the fix:
+- Both loop paths share one edge-triggered logger (`_Edges` in `main.py`): `Watched screen (…) went dark` /
+  `is active again`, and in the RGB-only path `RGB-only capture failing (…)` once per failure streak and
+  `RGB-only capture recovered`.
+- `capture/fullscreen_watch.py` polls the shell's notification state once a second
+  (`SHQueryUserNotificationState`: `3 = exclusive D3D fullscreen`, `2 = busy` is a non-exclusive fullscreen app,
+  `5 = normal desktop`; every value is spelled out in the log) and logs **`Fullscreen state A -> B; frames since the
+  last report: N fresh, M reused; last fresh frame … ago; last frame WxH via dxgi|gdi, mean brightness X/255`** at
+  every change, and the same summary every 30 s while exclusive. One exclusive session answers "black frames"
+  (fresh frames, brightness near 0) vs "no frames" (reused frames, last fresh frame long ago).
+- While exclusive and no fresh Desktop Duplication frame has arrived for 5 s, the camera is **released and rebuilt**
+  (at most 3 times per exclusive episode, logged as `re-creating the camera (n of 3 …)`). Releasing matters: dxcam
+  keeps one instance per output and `dxcam.create` hands an unreleased one straight back — the old failure path only
+  forgot the camera, so it kept the broken one; it now releases too.
+
+**To test:** play ~1 minute in exclusive fullscreen, switch back, then read
+`%LOCALAPPDATA%\matterlights\matterlights.log` for the `Fullscreen state` lines. Until it is solved, borderless
+fullscreen is the mode that keeps the lights in sync.
+
 ### Windows: the dashboard says "Restarted" but sync is not running
 
 Look in the log for `Another MatterLights sync loop is already running` next to a

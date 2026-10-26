@@ -27,14 +27,17 @@ wrapper and monitor enumeration moving behind the shared ``Monitor`` type.
 
 from __future__ import annotations
 
+import ctypes
 from ctypes import windll
 import logging
 import re
 import threading
+import time
 
 from mss import MSS
 
 from matterlights.capture import Monitor, bgrx_to_rgb, rgb_to_png, stride_rgb
+from matterlights.capture.fullscreen_watch import FullscreenWatch
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +46,7 @@ _DXCAM_CAMERAS: dict[tuple[int, int], object] = {}
 _DXCAM_LAST_FRAME: dict[tuple[int, int], tuple[bytes, int, int]] = {}
 _DXCAM_OUTPUTS: list[dict[str, int | bool]] | None = None
 _DXCAM_UNAVAILABLE = False
+_WATCH = FullscreenWatch()   # exclusive fullscreen: logged, and a starved duplication re-created (fullscreen_watch.py)
 
 _OUTPUT_INFO_RE = re.compile(
     r"Device\[(\d+)\]\s*Output\[(\d+)\]:\s*Res:\((\d+),\s*(\d+)\)\s*Rot:(\d+)\s*Primary:(True|False)"
@@ -114,12 +118,48 @@ def _dxcam_output_for_region(region: dict) -> tuple[int, int] | None:
     return int(chosen["device_idx"]), int(chosen["output_idx"])
 
 
+def _notification_state() -> int | None:
+    """``SHQueryUserNotificationState``: 3 = an exclusive D3D fullscreen app owns the screen. None if the query fails."""
+    try:
+        state = ctypes.c_int(0)
+        if windll.shell32.SHQueryUserNotificationState(ctypes.byref(state)) != 0:   # S_OK
+            return None
+        return int(state.value)
+    except Exception:  # noqa: BLE001 - a diagnostic must never break capture
+        return None
+
+
+def _drop_camera(key: tuple[int, int]) -> None:
+    """Release and forget a camera, so the next grab builds a new one.
+
+    Releasing matters: dxcam keeps one instance per output and hands an unreleased one straight back from
+    ``dxcam.create``, so merely forgetting it (what the failure path used to do) re-used the broken camera.
+    """
+    with _DXCAM_LOCK:
+        camera = _DXCAM_CAMERAS.pop(key, None)
+    if camera is not None:
+        try:
+            camera.release()
+        except Exception:  # noqa: BLE001
+            LOGGER.debug("dxcam camera failed to release cleanly", exc_info=True)
+
+
 def _dxcam_capture(region: dict) -> tuple[bytes, int, int] | None:
     """Grab ``region`` via Desktop Duplication, or None if that is not possible."""
+    grabbed = _dxcam_grab(region)
+    return None if grabbed is None else grabbed[:3]
 
+
+def _dxcam_key(region: dict) -> tuple[int, int] | None:
     if _DXCAM_UNAVAILABLE:
         return None
-    key = _dxcam_output_for_region(region)
+    return _dxcam_output_for_region(region)
+
+
+def _dxcam_grab(region: dict) -> tuple[bytes, int, int, bool] | None:
+    """Like ``_dxcam_capture``, plus whether the frame is FRESH (False: no new frame, the last one reused)."""
+
+    key = _dxcam_key(region)
     if key is None:
         return None
 
@@ -144,16 +184,16 @@ def _dxcam_capture(region: dict) -> tuple[bytes, int, int] | None:
                 # No new frame since the last call: the screen has not changed.
                 # Reuse the previous one rather than reporting a black screen,
                 # which would make the lights blink off on a static desktop.
-                return _DXCAM_LAST_FRAME.get(key)
+                last = _DXCAM_LAST_FRAME.get(key)
+                return None if last is None else (*last, False)
 
             height, width = frame.shape[0], frame.shape[1]
             raw = frame.tobytes()
             _DXCAM_LAST_FRAME[key] = (raw, width, height)
-            return raw, width, height
+            return raw, width, height, True
     except Exception as error:  # noqa: BLE001
         LOGGER.warning("Desktop Duplication capture failed (%s); using GDI capture", error)
-        with _DXCAM_LOCK:
-            _DXCAM_CAMERAS.pop(key, None)
+        _drop_camera(key)
         return None
 
 
@@ -207,10 +247,19 @@ class WindowsCaptureBackend:
 
     def grab(self, capture_target: str) -> tuple[bytes, int, int]:
         region = _capture_region(self._session, capture_target)
-        captured = _dxcam_capture(region)
-        if captured is not None:
-            return captured
+        now = time.monotonic()
+        if _WATCH.should_poll(now):
+            _WATCH.on_state(now, _notification_state())
+        grabbed = _dxcam_grab(region)
+        if grabbed is not None:
+            raw, width, height, fresh = grabbed
+            if _WATCH.on_frame(now, raw, width, height, fresh=fresh, backend="dxgi"):
+                key = _dxcam_key(region)
+                if key is not None:
+                    _drop_camera(key)
+            return raw, width, height
         screenshot = self._session.grab(region)
+        _WATCH.on_frame(now, screenshot.raw, screenshot.width, screenshot.height, fresh=True, backend="gdi")
         return screenshot.raw, screenshot.width, screenshot.height
 
     def list_monitors(self) -> list[Monitor]:

@@ -145,7 +145,7 @@ def main() -> int:
     display_off_active = False
     capture_fallback_active = False
     capture_inhibited = False
-    screen_dark_active = False
+    edges = _Edges()
     master_off_active = False
     last_rgb_frame: dict | None = None
     last_light_update = 0.0
@@ -324,6 +324,7 @@ def main() -> int:
                                 ambience_near_ids,
                                 last_colors,
                                 display_on,
+                                edges,
                             )
                     elif not display_on:
                         just_entered = not display_off_active
@@ -422,12 +423,7 @@ def main() -> int:
                             )
                             for sample in zone_samples
                         )
-                        if screen_dark != screen_dark_active:
-                            screen_dark_active = screen_dark
-                            if screen_dark:
-                                LOGGER.info("Watched screen (%s) went dark; turning lights off", capture_target)
-                            else:
-                                LOGGER.info("Watched screen (%s) is active again; restoring lights", capture_target)
+                        edges.screen_dark(screen_dark, capture_target)
 
                         if rgb_publisher is not None:
                             # Kept so the error path can keep the extension fed
@@ -596,16 +592,51 @@ def main() -> int:
 
 
 
+class _Edges:
+    """Edge-triggered log lines, shared by the normal path and the RGB-only path.
+
+    The two paths had drifted: the normal one logged "Watched screen went dark", the RGB-only one (the lamps switched
+    off, the case and the soundbar still following the screen) decided dark in silence and swallowed capture failures
+    at DEBUG. So the owner's exclusive-fullscreen blackout (2026-10-25, lamps off) left no trace in the log at all.
+    One state, one wording, for both: a line when the screen goes dark or comes back, a WARNING at the first failed
+    capture of a streak and a line when it recovers -- never one per tick.
+    """
+
+    def __init__(self) -> None:
+        self.dark = False
+        self.capture_failing = False
+
+    def screen_dark(self, dark: bool, capture_target: str) -> None:
+        if dark == self.dark:
+            return
+        self.dark = dark
+        if dark:
+            LOGGER.info("Watched screen (%s) went dark; turning lights off", capture_target)
+        else:
+            LOGGER.info("Watched screen (%s) is active again; restoring lights", capture_target)
+
+    def capture_failed(self, error: BaseException) -> None:
+        if not self.capture_failing:
+            self.capture_failing = True
+            LOGGER.warning("RGB-only capture failing (%s: %s); the RGB goes dark until it recovers",
+                           type(error).__name__, error)
+
+    def capture_ok(self) -> None:
+        if self.capture_failing:
+            self.capture_failing = False
+            LOGGER.info("RGB-only capture recovered")
+
+
 def _publish_for_rgb_only(
-    publisher, session, settings, control_state, ambience_near_ids, last_colors, display_on
+    publisher, session, settings, control_state, ambience_near_ids, last_colors, display_on, edges: _Edges
 ) -> None:
     """Capture and publish for the RGB extension while the lamps are switched off.
 
     A cut-down version of the normal path: no availability sweep, no bulb
     updates, no capture-fallback bookkeeping. If the capture fails for any
     reason -- an inhibited compositor, an unplugged screen -- this tick is
-    simply skipped. The lamps are already off; there is nothing to protect and
-    nothing worth logging loudly about.
+    skipped (the RGB then goes dark on its staleness rule), and the first failure
+    of a streak is logged, like the dark-screen edge (``_Edges``).
     """
 
     try:
@@ -621,14 +652,17 @@ def _publish_for_rgb_only(
             ambience_near_ids,
             last_colors,
         )
-    except Exception:  # noqa: BLE001 - the extension must never break the loop
+    except Exception as error:  # noqa: BLE001 - the extension must never break the loop
         LOGGER.debug("RGB-only capture skipped", exc_info=True)
+        edges.capture_failed(error)
         return
+    edges.capture_ok()
 
     screen_dark = bool(zone_samples) and all(
         sample.should_turn_off(settings.dark_threshold, settings.dark_active_ratio_threshold)
         for sample in zone_samples
     )
+    edges.screen_dark(screen_dark, capture_target)
     _publish_rgb_frame(
         publisher,
         zone_samples,

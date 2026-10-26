@@ -183,8 +183,69 @@ class RgbPublishDuringMasterOffTest(unittest.TestCase):
         )
         control = SimpleNamespace(capture_target=None, lights_on=False, rgb_on=True)
 
-        _publish_for_rgb_only(publisher, Exploding(), settings, control, ["a"], {}, True)
+        from matterlights.main import _Edges
+
+        edges = _Edges()
+        with self.assertLogs("matterlights", level="INFO") as logs:
+            _publish_for_rgb_only(publisher, Exploding(), settings, control, ["a"], {}, True, edges)
+            _publish_for_rgb_only(publisher, Exploding(), settings, control, ["a"], {}, True, edges)
         self.assertEqual(publisher.calls, 0, "nothing published, nothing raised")
+        failing = [l for l in logs.output if "RGB-only capture failing" in l]
+        self.assertEqual(len(failing), 1, "one WARNING per failure streak, not one per tick")
+        self.assertIn("compositor inhibited", failing[0])
+
+
+class EdgesTest(unittest.TestCase):
+    """The normal and the RGB-only path share one edge-triggered logger (they had drifted: the RGB-only path, used
+    while the lamps are switched off, went dark in silence -- the owner's exclusive-fullscreen blackout left no trace)."""
+
+    def test_dark_edges_log_once_each_way(self):
+        from matterlights.main import _Edges
+
+        e = _Edges()
+        with self.assertLogs("matterlights", level="INFO") as logs:
+            for dark in (True, True, True, False, False, True):
+                e.screen_dark(dark, "primary")
+        self.assertEqual(sum("went dark" in l for l in logs.output), 2)
+        self.assertEqual(sum("active again" in l for l in logs.output), 1)
+
+    def test_recovery_is_logged_once(self):
+        from matterlights.main import _Edges
+
+        e = _Edges()
+        with self.assertLogs("matterlights", level="INFO") as logs:
+            e.capture_failed(RuntimeError("x"))
+            e.capture_ok()
+            e.capture_ok()
+        self.assertEqual(sum("recovered" in l for l in logs.output), 1)
+
+    def test_the_rgb_only_path_logs_dark(self):
+        """Positive control on the drift itself: a black frame through the RGB-only path now says so."""
+        from matterlights.main import _Edges, _publish_for_rgb_only
+
+        class Black:
+            def grab(self, _target):
+                return bytes(64 * 36 * 4), 64, 36
+
+        class Publisher:
+            frames = []
+
+            def publish(self, **k) -> bool:
+                self.frames.append(k)
+                return True
+
+        settings = SimpleNamespace(screen_capture_target="primary", sample_stride=7, color_boost=1.5,
+                                   light_entities=["a"], dark_threshold=12, dark_active_ratio_threshold=0.05,
+                                   rgb_brightness_floor=0, rgb_brightness_scale=1.0)
+        control = SimpleNamespace(capture_target=None, lights_on=False, rgb_on=True, mode="autonomous")
+        edges = _Edges()
+        with self.assertLogs("matterlights", level="INFO") as logs:
+            try:
+                _publish_for_rgb_only(Publisher(), Black(), settings, control, ["a"], {}, True, edges)
+            except Exception:  # the publish step's settings are not the point here
+                pass
+        self.assertTrue(edges.dark)
+        self.assertTrue(any("went dark" in l for l in logs.output))
 
 
 class PublishRgbFrameTest(unittest.TestCase):
