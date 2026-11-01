@@ -42,6 +42,12 @@ Environment=MATTERLIGHTS_ENV_FILE=@INSTALL_DIR@/.env
 # StandardOutput=journal below already captures the same lines.
 Environment=LOG_PATH=none
 
+# Where the sync loop leaves its mark. A shutdown with no mark leaves the room alone: Garuda is also powered on and off with nobody at
+# it. It lives here and not in /run/user/1000, which is torn down with the session before this unit stops. The sync loop runs as the
+# user, hence 1777. Anyone local touching it can only make the lights go off at shutdown.
+RuntimeDirectory=matterlights
+RuntimeDirectoryMode=1777
+
 ExecStart=/bin/true
 ExecStop=@VENV_DIR@/bin/python -m matterlights.lights_off
 TimeoutStopSec=20

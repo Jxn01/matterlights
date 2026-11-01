@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import logging
 import time
 
+from matterlights.sync_mark import leave_mark
 from matterlights.ambience import (
     build_ambience,
     build_ambience_zone_samples,
@@ -118,6 +119,7 @@ def main() -> int:
     if sync_lock is None:
         LOGGER.warning("Another MatterLights sync loop is already running; this instance will exit.")
         return 0
+    leave_mark()
 
     client = HomeAssistantClient(
         settings.ha_url,

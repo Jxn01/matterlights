@@ -41,6 +41,7 @@ import logging
 from matterlights.config import load_settings
 from matterlights.home_assistant import HomeAssistantClient
 from matterlights.logging_setup import configure_logging
+from matterlights.sync_mark import sync_ran
 
 
 LOGGER = logging.getLogger("matterlights.lights_off")
@@ -50,6 +51,10 @@ def main() -> int:
     settings = load_settings()
     # Not rotating: the sync loop may still be alive and holding the same file.
     configure_logging(settings.log_path, rotating=False)
+
+    if not sync_ran():
+        LOGGER.info("The sync loop never ran this boot; leaving the lights alone")
+        return 0
 
     if not settings.light_entities:
         LOGGER.warning("No lights configured; nothing to turn off")
