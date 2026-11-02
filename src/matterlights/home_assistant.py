@@ -115,13 +115,12 @@ class HomeAssistantClient:
             LOGGER.debug("Failed to post heartbeat: %s", _concise_request_error(exc))
             return False
 
-    def get_switch_state(self, entity_id: str) -> bool | None:
-        """Read an on/off entity: ``True``, ``False``, or ``None`` for no reading.
+    def get_state(self, entity_id: str) -> str | None:
+        """Read one entity's state, or ``None`` for no reading.
 
         ``None`` covers Home Assistant being unreachable, the entity missing
-        (404) and the states ``unknown``/``unavailable``. None of those is
-        "off" -- reading them as off would switch the lights off every time
-        Home Assistant restarts.
+        (404) and the states ``unknown``/``unavailable``. A caller must not read
+        any of those as a value.
         """
 
         try:
@@ -136,7 +135,16 @@ class HomeAssistantClient:
         except (requests.RequestException, ValueError, AttributeError) as exc:
             LOGGER.debug("Failed to read %s: %s", entity_id, exc)
             return None
-        return {"on": True, "off": False}.get(state)
+        return None if state in ("unknown", "unavailable") else state
+
+    def get_switch_state(self, entity_id: str) -> bool | None:
+        """Read an on/off entity: ``True``, ``False``, or ``None`` for no reading.
+
+        No reading is not "off": reading it as off would switch the lights off
+        every time Home Assistant restarts.
+        """
+
+        return {"on": True, "off": False}.get(self.get_state(entity_id))
 
     def set_switch_state(self, entity_id: str, on: bool) -> bool:
         """Switch an on/off entity, reporting whether Home Assistant accepted it.

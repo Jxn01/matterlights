@@ -493,6 +493,53 @@ How it behaves (`src/matterlights/ha_switches.py`):
 
 Both empty (the default) mirrors nothing and starts no thread.
 
+## Two machines, one set of bulbs
+
+The lights can follow a second source: a matterlights on another machine, watching something
+other than this PC's screen. Two loops driving the same bulbs is a strobe, so a selector in Home
+Assistant names the owner and each instance says which value means itself:
+
+```ini
+HA_OWNER_ENTITY=input_select.tv_media_owner
+HA_OWNER_VALUE=Rig
+```
+
+How it behaves (`src/matterlights/owner.py`):
+
+- **Not the owner: hands off, completely.** No colours, no lights-off from the master switch or a
+  sleeping display, no lights-off at shutdown (the sync loop's hook and `lights_off` both ask), and
+  no heartbeat, so Home Assistant's stale-heartbeat fallback keeps watching the instance that really
+  has the bulbs. The RGB extension is this machine's own and carries on.
+- **Becoming the owner** forgets what it last sent, so every bulb gets the current colour at once.
+- **It starts out not owning**, and **no reading keeps the last answer**: Home Assistant restarting
+  neither starts a second driver nor stops the first. A shutdown that cannot get a reading acts as
+  it always did.
+- It polls every `HA_SWITCH_POLL_SECONDS` on a thread of its own.
+
+Both empty (the default) means there is no owner to ask and this instance always drives the bulbs.
+
+### An LG TV as the source
+
+`CAPTURE_SOURCE=tv` replaces the screen with frames sent over UDP by a rooted TV's companion
+(`src/matterlights/capture/tv.py`, the sending half is the `tv-hub` project). The packet is `JXNF`,
+then `!IHHB` (sequence, width, height, flag), then packed RGB; the frames are 64 x 36, so set
+`SAMPLE_STRIDE=1`.
+
+| What the TV sends | What the bulbs do |
+| --- | --- |
+| Frames (flag 1) | Follow the picture, through the same colour engine as a screen. |
+| Protected (flag 2): Netflix hides its picture from capture | A steady warm glow. |
+| Idle (flag 0): the TV's Home screen, its saver, standby, or Netflix with the warm glow turned off | Off. |
+| Nothing for 6 seconds: a TV that is off sends nothing | Off. |
+
+Idle and silence are a black frame, not a skipped tick. A skipped tick would freeze the bulbs on the
+last colour for as long as the TV stays off; a black frame takes the road a dark screen already
+takes, which turns the lights off once and then sends nothing.
+
+Run it with `RESPECT_DISPLAY_SLEEP=false` and `TURN_OFF_ON_SHUTDOWN=false`: the machine has no
+display of its own, and its restart must not darken a room. Packets from anyone but
+`TV_FRAME_SENDER` are ignored.
+
 ## Windows autostart
 
 
@@ -575,6 +622,12 @@ All of these files are gitignored (`.env.*`, `.matterlights-*.json`), and
 | `HA_LIGHTS_SWITCH_ENTITY` | *(empty: not mirrored)* | On/off entity in Home Assistant kept equal to the dashboard's **Lights** switch, both ways. Must be an entity ID (`domain.name`). See [Home Assistant switches](#home-assistant-switches). |
 | `HA_RGB_SWITCH_ENTITY` | *(empty: not mirrored)* | Same, for the **RGB** switch. |
 | `HA_SWITCH_POLL_SECONDS` | `1.0` | How often the switch mirror polls Home Assistant and the control file. Must be greater than 0. |
+| `HA_OWNER_ENTITY` | *(empty: always the owner)* | Entity in Home Assistant naming which instance drives the bulbs. See *Two machines, one set of bulbs*. |
+| `HA_OWNER_VALUE` | *(empty)* | The value of `HA_OWNER_ENTITY` that means this instance. Required with it. |
+| `CAPTURE_SOURCE` | `screen` | `screen`, or `tv` for frames from an LG TV. |
+| `TV_FRAME_BIND` | `0.0.0.0` | Address the TV source listens on. |
+| `TV_FRAME_PORT` | `8792` | UDP port the TV source listens on. |
+| `TV_FRAME_SENDER` | *(empty)* | The TV's address; packets from anyone else are ignored. Required with `CAPTURE_SOURCE=tv`. |
 | `COLOR_SYNC_MODE` | `zoned` | `ambience` (recommended), `zoned`, or `shared-variant`. |
 | `PRIMARY_LIGHT_ZONE_NAMES` | `top-center,bottom-left` | Primary bulbs used in shared-variant mode. |
 | `AMBIENCE_NEAR_LIGHTS` | empty | Entity IDs of the bulbs beside the screen (ambience mode's near group). |

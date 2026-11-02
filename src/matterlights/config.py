@@ -37,6 +37,12 @@ class Settings:
     ha_lights_switch_entity: str = ""
     ha_rgb_switch_entity: str = ""
     ha_switch_poll_seconds: float = 1.0
+    ha_owner_entity: str = ""
+    ha_owner_value: str = ""
+    capture_source: str = "screen"
+    tv_frame_bind: str = "0.0.0.0"
+    tv_frame_port: int = 8792
+    tv_frame_sender: str = ""
     color_sync_mode: str = "zoned"
     primary_light_zone_names: list[str] = field(default_factory=list)
     ambience_near_lights: list[str] = field(default_factory=list)
@@ -150,6 +156,12 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         ha_lights_switch_entity=get_value("HA_LIGHTS_SWITCH_ENTITY", "").strip(),
         ha_rgb_switch_entity=get_value("HA_RGB_SWITCH_ENTITY", "").strip(),
         ha_switch_poll_seconds=float(get_value("HA_SWITCH_POLL_SECONDS", "1.0")),
+        ha_owner_entity=get_value("HA_OWNER_ENTITY", "").strip(),
+        ha_owner_value=get_value("HA_OWNER_VALUE", "").strip(),
+        capture_source=get_value("CAPTURE_SOURCE", "screen").strip().lower(),
+        tv_frame_bind=get_value("TV_FRAME_BIND", "0.0.0.0").strip(),
+        tv_frame_port=int(get_value("TV_FRAME_PORT", "8792")),
+        tv_frame_sender=get_value("TV_FRAME_SENDER", "").strip(),
         color_sync_mode=get_value("COLOR_SYNC_MODE", "zoned").strip().lower(),
         primary_light_zone_names=_parse_light_zone_layout(
             get_value("PRIMARY_LIGHT_ZONE_NAMES", "top-center,bottom-left")
@@ -356,11 +368,18 @@ def _validate_settings(settings: Settings) -> None:
     for name, entity_id in (
         ("HA_LIGHTS_SWITCH_ENTITY", settings.ha_lights_switch_entity),
         ("HA_RGB_SWITCH_ENTITY", settings.ha_rgb_switch_entity),
+        ("HA_OWNER_ENTITY", settings.ha_owner_entity),
     ):
         if entity_id and "." not in entity_id:
             raise ValueError(f"{name} must be an entity ID such as input_boolean.example, got {entity_id!r}")
     if settings.ha_switch_poll_seconds <= 0:
         raise ValueError("HA_SWITCH_POLL_SECONDS must be greater than 0")
+    if bool(settings.ha_owner_entity) != bool(settings.ha_owner_value):
+        raise ValueError("HA_OWNER_ENTITY and HA_OWNER_VALUE must be set together")
+    if settings.capture_source not in ("screen", "tv"):
+        raise ValueError(f"CAPTURE_SOURCE must be screen or tv, got {settings.capture_source}")
+    if settings.capture_source == "tv" and not settings.tv_frame_sender:
+        raise ValueError("TV_FRAME_SENDER must name the TV's address when CAPTURE_SOURCE is tv")
     if settings.availability_refresh_seconds <= 0:
         raise ValueError("AVAILABILITY_REFRESH_SECONDS must be greater than 0")
     if settings.sync_interval_seconds <= 0:

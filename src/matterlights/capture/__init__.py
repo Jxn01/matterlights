@@ -85,8 +85,17 @@ class Monitor:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class TvSource:
+    """Where an LG TV's frames arrive: see ``tv.py``. ``sender`` is the TV's address."""
+
+    bind: str
+    port: int
+    sender: str
+
+
 class CaptureBackend(Protocol):
-    """One frame source. Implementations live in ``windows.py`` / ``linux.py``."""
+    """One frame source. Implementations live in ``windows.py`` / ``linux.py`` / ``tv.py``."""
 
     def grab(self, capture_target: str) -> tuple[bytes, int, int]:
         """Return one frame as ``(raw_bgrx, width, height)``.
@@ -114,22 +123,25 @@ _BACKEND: CaptureBackend | None = None
 _BACKEND_LOCK = threading.Lock()
 _SYNC_INTERVAL_SECONDS = 0.2
 _FALLBACK_TARGET: str | None = None
+_TV_SOURCE: TvSource | None = None
 
 
-def configure(sync_interval_seconds: float, fallback_target: str) -> None:
-    """Hand the backend the two settings it cannot discover for itself.
+def configure(sync_interval_seconds: float, fallback_target: str, tv_source: TvSource | None = None) -> None:
+    """Hand the backend the settings it cannot discover for itself.
 
     ``sync_interval_seconds`` sets the Linux stream's frame-rate cap, and
     ``fallback_target`` is the screen to use when the selected one is unplugged.
+    ``tv_source`` replaces the screen with an LG TV's frames.
     Called once at startup, before the backend is built; a backend already in
     existence is dropped so it picks the new values up.
     """
 
-    global _SYNC_INTERVAL_SECONDS, _FALLBACK_TARGET
-    if (sync_interval_seconds, fallback_target) == (_SYNC_INTERVAL_SECONDS, _FALLBACK_TARGET):
+    global _SYNC_INTERVAL_SECONDS, _FALLBACK_TARGET, _TV_SOURCE
+    if (sync_interval_seconds, fallback_target, tv_source) == (_SYNC_INTERVAL_SECONDS, _FALLBACK_TARGET, _TV_SOURCE):
         return
     _SYNC_INTERVAL_SECONDS = sync_interval_seconds
     _FALLBACK_TARGET = fallback_target
+    _TV_SOURCE = tv_source
     reset_backend()
 
 
@@ -161,6 +173,11 @@ def reset_backend() -> None:
 
 
 def _create_backend() -> CaptureBackend:
+    if _TV_SOURCE is not None:
+        from matterlights.capture.tv import TvCaptureBackend
+
+        return TvCaptureBackend(_TV_SOURCE)
+
     if sys.platform == "win32":
         from matterlights.capture.windows import WindowsCaptureBackend
 
@@ -202,6 +219,16 @@ def bgrx_to_rgb(raw: bytes, width: int, height: int, stride: int | None = None) 
     rgb[1::3] = raw[1::4]
     rgb[2::3] = raw[0::4]
     return bytes(rgb)
+
+
+def rgb_to_bgrx(rgb: bytes) -> bytes:
+    """Packed RGB to BGRx, the shape every backend hands over."""
+
+    bgrx = bytearray(len(rgb) // 3 * 4)
+    bgrx[0::4] = rgb[2::3]
+    bgrx[1::4] = rgb[1::3]
+    bgrx[2::4] = rgb[0::3]
+    return bytes(bgrx)
 
 
 def rgb_to_png(rgb: bytes, size: tuple[int, int]) -> bytes:

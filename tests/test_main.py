@@ -148,7 +148,7 @@ class RgbPublishDuringMasterOffTest(unittest.TestCase):
         """Otherwise a machine with no extension would capture for nobody."""
 
         source = self._source()
-        start = source.index("if not control_state.lights_on:")
+        start = source.index("if not owned or not control_state.lights_on:")
         end = source.index("elif not display_on:", start)
         branch = source[start:end]
         self.assertIn("rgb_publisher is not None", branch)

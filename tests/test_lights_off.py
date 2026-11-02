@@ -27,7 +27,7 @@ class Mark(unittest.TestCase):
         platform = mock.patch.object(sync_mark.sys, "platform", "linux")
         platform.start()
         self.addCleanup(platform.stop)
-        self.settings = mock.Mock(light_entities=["light.a"], log_path=None)
+        self.settings = mock.Mock(light_entities=["light.a"], log_path=None, ha_owner_entity="", ha_owner_value="")
         self.client = mock.Mock()
         for target, value in (("load_settings", mock.Mock(return_value=self.settings)), ("HomeAssistantClient", mock.Mock(return_value=self.client)),
                               ("configure_logging", mock.Mock())):
@@ -38,6 +38,14 @@ class Mark(unittest.TestCase):
     def test_lights_off_skips_when_sync_never_ran(self):
         self.assertEqual(lights_off.main(), 0)
         self.assertEqual(self.client.mock_calls, [])
+
+    def test_lights_off_leaves_another_machines_lights_alone(self):
+        self.mark.touch()
+        self.settings.ha_owner_entity = "input_select.owner"
+        self.settings.ha_owner_value = "Rig"
+        self.client.get_state.return_value = "TV"
+        self.assertEqual(lights_off.main(), 0)
+        self.client.turn_off_lights_urgently.assert_not_called()
 
     def test_lights_off_acts_when_sync_ran(self):
         sync_mark.leave_mark()

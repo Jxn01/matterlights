@@ -20,6 +20,7 @@ from matterlights.ha_switches import start_switch_mirror
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
 from matterlights.light_worker import LightWorker
 from matterlights.logging_setup import configure_logging
+from matterlights.owner import start_owner_gate
 from matterlights.playback import MODE_CUSTOM, CustomPlayer, effective_capture_target, load_control_state
 from matterlights.process_lock import acquire_sync_singleton
 from matterlights.shutdown_hook import start_shutdown_hook
@@ -113,7 +114,10 @@ def main() -> int:
     # The capture backend needs the sync cadence (it caps the stream's frame
     # rate from it) and the configured default screen (to fall back to when the
     # selected one is unplugged). Neither is discoverable from inside capture.
-    _capture.configure(settings.sync_interval_seconds, settings.screen_capture_target)
+    tv_source = None
+    if settings.capture_source == "tv":
+        tv_source = _capture.TvSource(settings.tv_frame_bind, settings.tv_frame_port, settings.tv_frame_sender)
+    _capture.configure(settings.sync_interval_seconds, settings.screen_capture_target, tv_source)
 
     sync_lock = acquire_sync_singleton(LOGGER)
     if sync_lock is None:
@@ -164,7 +168,15 @@ def main() -> int:
         rgb_publisher = AmbiencePublisher(settings.rgb_publish_socket, LOGGER)
         LOGGER.info("RGB extension enabled; publishing to %s", settings.rgb_publish_socket)
 
+    # Which machine drives the bulbs, when two can. None unless HA_OWNER_ENTITY is set.
+    owner_watch = start_owner_gate(settings, client, LOGGER)
+    owner_gate = owner_watch[0] if owner_watch is not None else None
+    standing_aside = False
+
     def turn_off_all_lights() -> None:
+        if owner_gate is not None and not owner_gate.owned():
+            LOGGER.info("Another machine owns the lights; leaving them alone")
+            return
         # Windows allows only a few seconds here. Every light gets identical
         # parameters, so this collapses into a single Home Assistant request --
         # but with a timeout of its own: the sync loop's is tuned for a loop that
@@ -253,11 +265,18 @@ def main() -> int:
                         control_file_mtime = current_control_file_mtime
                         reset_runtime_caches()
 
+                    owned = owner_gate is None or owner_gate.owned()
+                    if standing_aside and owned:
+                        standing_aside = False
+                        reset_runtime_caches()
+                        LOGGER.info("The lights are ours again")
+
                     current_time = time.monotonic()
                     if (
                         settings.heartbeat_entity_id
                         and settings.heartbeat_interval_seconds > 0
                         and current_time >= next_heartbeat
+                        and owned
                     ):
                         # Deliberately before the availability refresh: if Home
                         # Assistant is unreachable this fails quietly, and the
@@ -293,20 +312,28 @@ def main() -> int:
                         entity_id for entity_id in settings.light_entities if entity_id in available_entity_ids
                     ]
 
-                    if not control_state.lights_on:
-                        # Master switch: off overrides every mode until re-enabled.
-                        just_entered = not master_off_active
-                        if just_entered:
-                            master_off_active = True
-                            master_off_confirmed.clear()
-                            reset_runtime_caches()
-                            LOGGER.info("Lights switched off (dashboard or Home Assistant)")
-                        # Sweep on entry, then only when availability changes --
-                        # which is the only moment ordered_available can differ.
-                        if just_entered or availability_refreshed:
-                            enforce_lights_off(
-                                client, ordered_available, master_off_confirmed, settings.transition_seconds
-                            )
+                    if not owned or not control_state.lights_on:
+                        if not owned:
+                            # Above the master switch and the display: both of those
+                            # turn lamps off, and these lamps are someone else's.
+                            if not standing_aside:
+                                standing_aside = True
+                                reset_runtime_caches()
+                                LOGGER.info("Another machine owns the lights; leaving them alone")
+                        else:
+                            # Master switch: off overrides every mode until re-enabled.
+                            just_entered = not master_off_active
+                            if just_entered:
+                                master_off_active = True
+                                master_off_confirmed.clear()
+                                reset_runtime_caches()
+                                LOGGER.info("Lights switched off (dashboard or Home Assistant)")
+                            # Sweep on entry, then only when availability changes --
+                            # which is the only moment ordered_available can differ.
+                            if just_entered or availability_refreshed:
+                                enforce_lights_off(
+                                    client, ordered_available, master_off_confirmed, settings.transition_seconds
+                                )
                         # The RGB extension has its own switch and is NOT silenced
                         # by the lamps' master switch -- switching the bulbs off at
                         # night should not also kill the case lighting. So keep
@@ -585,6 +612,8 @@ def main() -> int:
         light_worker.stop()
         if switch_mirror is not None:
             switch_mirror.stop()
+        if owner_watch is not None:
+            owner_watch[1].stop()
         if display_monitor is not None:
             display_monitor.stop()
         if shutdown_hook is not None:

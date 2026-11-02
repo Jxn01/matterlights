@@ -41,6 +41,7 @@ import logging
 from matterlights.config import load_settings
 from matterlights.home_assistant import HomeAssistantClient
 from matterlights.logging_setup import configure_logging
+from matterlights.owner import owned_elsewhere
 from matterlights.sync_mark import sync_ran
 
 
@@ -65,6 +66,10 @@ def main() -> int:
         settings.ha_token,
         timeout_seconds=settings.session_end_timeout_seconds,
     )
+
+    if owned_elsewhere(settings, client):
+        LOGGER.info("Another machine owns the lights; leaving them alone")
+        return 0
 
     LOGGER.info("Session ending; turning lights off")
     accepted = client.turn_off_lights_urgently(
