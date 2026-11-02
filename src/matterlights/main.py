@@ -102,6 +102,30 @@ def enforce_lights_off(
     confirmed_off.update(entity_id for entity_id in pending if entity_id not in failed)
 
 
+class OffGuard:
+    """An off-state's answer to a colour write already on its way.
+
+    The worker sends a batch one bulb at a time, so a colour can land after the
+    off-state has switched that bulb off and confirmed it. Nothing looks at a
+    confirmed bulb again, so it stayed lit until the next change of state: on
+    2026-11-02, one lamp with the master switch off. Entering an off-state now
+    abandons the batch, and if a write may still land, sweeps once more after it has.
+    """
+
+    def __init__(self, worker: LightWorker) -> None:
+        self._worker = worker
+        self._owed = False
+
+    def entered(self) -> None:
+        self._owed = self._worker.abandon()
+
+    def resweep_due(self) -> bool:
+        if self._owed and not self._worker.busy:
+            self._owed = False
+            return True
+        return False
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -198,6 +222,7 @@ def main() -> int:
 
     # Home Assistant writes run here, never on the capture loop: see light_worker.
     light_worker = LightWorker(client, LOGGER)
+    off_guard = OffGuard(light_worker)
     # The dashboard's Lights/RGB switches, mirrored to Home Assistant helpers on
     # a thread of their own. None unless HA_*_SWITCH_ENTITY is set.
     switch_mirror = start_switch_mirror(settings, client, LOGGER)
@@ -318,6 +343,7 @@ def main() -> int:
                             # turn lamps off, and these lamps are someone else's.
                             if not standing_aside:
                                 standing_aside = True
+                                light_worker.abandon()
                                 reset_runtime_caches()
                                 LOGGER.info("Another machine owns the lights; leaving them alone")
                         else:
@@ -327,7 +353,11 @@ def main() -> int:
                                 master_off_active = True
                                 master_off_confirmed.clear()
                                 reset_runtime_caches()
+                                off_guard.entered()
                                 LOGGER.info("Lights switched off (dashboard or Home Assistant)")
+                            if off_guard.resweep_due():
+                                master_off_confirmed.clear()
+                                just_entered = True
                             # Sweep on entry, then only when availability changes --
                             # which is the only moment ordered_available can differ.
                             if just_entered or availability_refreshed:
@@ -361,7 +391,11 @@ def main() -> int:
                             display_off_active = True
                             display_off_confirmed.clear()
                             reset_runtime_caches()
+                            off_guard.entered()
                             LOGGER.info("Display off; turning lights off")
+                        if off_guard.resweep_due():
+                            display_off_confirmed.clear()
+                            just_entered = True
                         if just_entered or availability_refreshed:
                             enforce_lights_off(
                                 client, ordered_available, display_off_confirmed, settings.transition_seconds

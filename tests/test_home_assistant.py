@@ -1,9 +1,26 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from matterlights.home_assistant import HomeAssistantClient
+
+
+class CancelledBatchTests(unittest.TestCase):
+    def test_a_cancelled_batch_stops_at_the_next_bulb(self) -> None:
+        client = HomeAssistantClient("http://ha.invalid", "token", timeout_seconds=3.0, inter_light_delay_seconds=0)
+        batches = [SimpleNamespace(entity_ids=[f"light.{n}"]) for n in "abc"]
+        sent = []
+
+        def apply(_self, update, transition_seconds):
+            sent.append(update.entity_ids[0])
+            return True
+
+        with patch.object(HomeAssistantClient, "_apply_light_update", apply):
+            failed = client._apply_light_updates_sequential(batches, 0.0, lambda: len(sent) >= 1)
+        self.assertEqual(sent, ["light.a"])
+        self.assertEqual(failed, [], "what was stopped did not fail")
 
 
 class TurnOffLightsUrgentlyTests(unittest.TestCase):

@@ -32,16 +32,32 @@ class Gate(unittest.TestCase):
         self.assertFalse(gate().owned())
 
     def test_it_follows_the_selector(self):
-        g = gate("Rig", "TV", "Rig")
+        g = gate("Rig", "Rig", "TV", "Rig", "Rig")
         answers = []
-        for _ in range(3):
+        for _ in range(5):
             g.tick()
             answers.append(g.owned())
-        self.assertEqual(answers, [True, False, True])
+        self.assertEqual(answers, [False, True, False, False, True])
+
+    def test_taking_over_waits_for_a_second_reading_and_letting_go_does_not(self):
+        g = gate("Rig", "Rig", "TV")
+        g.tick()
+        self.assertFalse(g.owned())
+        g.tick()
+        self.assertTrue(g.owned())
+        g.tick()
+        self.assertFalse(g.owned())
+
+    def test_a_flicker_of_the_selector_does_not_take_the_lights(self):
+        g = gate("Rig", "TV", "Rig")
+        for _ in range(3):
+            g.tick()
+        self.assertFalse(g.owned())
 
     def test_no_reading_keeps_the_last_answer(self):
         for last in ("Rig", "TV"):
-            g = gate(last, None)
+            g = gate(last, last, None)
+            g.tick()
             g.tick()
             before = g.owned()
             g.tick()
@@ -91,6 +107,14 @@ class TheLoopRespectsIt(unittest.TestCase):
         gate_at = self.source.index("if not owned or not control_state.lights_on:")
         self.assertLess(gate_at, self.source.index("elif not display_on:"))
         self.assertLess(gate_at, self.source.index("elif control_state.mode == MODE_CUSTOM:"))
+
+    def test_every_off_state_guards_against_a_late_colour(self):
+        self.assertEqual(self.source.count("off_guard.entered()"), 2)
+        self.assertEqual(self.source.count("off_guard.resweep_due()"), 2)
+
+    def test_handing_over_abandons_what_is_on_its_way(self):
+        at = self.source.index("standing_aside = True")
+        self.assertIn("light_worker.abandon()", self.source[at:at + 120])
 
     def test_turning_lamps_off_in_that_branch_needs_ownership(self):
         branch = self.source[self.source.index("if not owned or not control_state.lights_on:"):self.source.index("elif not display_on:")]

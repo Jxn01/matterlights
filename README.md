@@ -510,7 +510,9 @@ How it behaves (`src/matterlights/owner.py`):
   sleeping display, no lights-off at shutdown (the sync loop's hook and `lights_off` both ask), and
   no heartbeat, so Home Assistant's stale-heartbeat fallback keeps watching the instance that really
   has the bulbs. The RGB extension is this machine's own and carries on.
-- **Becoming the owner** forgets what it last sent, so every bulb gets the current colour at once.
+- **Becoming the owner** forgets what it last sent, so every bulb gets the current colour at once. It
+  waits for a second reading first, and letting go is immediate, so the old owner's last colour cannot
+  land on top of the new owner's first act.
 - **It starts out not owning**, and **no reading keeps the last answer**: Home Assistant restarting
   neither starts a second driver nor stops the first. A shutdown that cannot get a reading acts as
   it always did.

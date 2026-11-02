@@ -25,7 +25,7 @@ class _Client:
         self.calls = 0
         self.started = threading.Event()
 
-    def apply_light_updates(self, updates, transition_seconds):
+    def apply_light_updates(self, updates, transition_seconds, cancelled=None):
         self.calls += 1
         self.started.set()
         time.sleep(self.delay)
@@ -130,5 +130,72 @@ class LightWorkerTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 2.0)
 
 
-if __name__ == "__main__":  # pragma: no cover
+class AbandonTest(unittest.TestCase):
+    """A colour must not land after the lamp was switched off (2026-11-02)."""
+
+    def _worker(self, client):
+        worker = LightWorker(client, logging.getLogger("test"))
+        self.addCleanup(worker.stop)
+        return worker
+
+    def test_nothing_on_its_way_means_nothing_can_land(self):
+        self.assertFalse(self._worker(_Client()).abandon())
+
+    def test_a_queued_batch_is_dropped(self):
+        client = _Client(delay=0.3)
+        worker = self._worker(client)
+        state = SimpleNamespace(update="x", entity_id="light.a")
+        worker.submit([state], 0.0)
+        self.assertTrue(client.started.wait(2))
+        worker.submit([state], 0.0)
+        worker.abandon()
+        for _ in range(100):
+            if not worker.busy:
+                break
+            time.sleep(0.01)
+        self.assertEqual(client.calls, 1)
+
+    def test_a_batch_under_way_is_told_to_stop_and_reported_as_landing(self):
+        seen = []
+        started = threading.Event()
+
+        class Slow:
+            def apply_light_updates(self, updates, transition_seconds, cancelled=None):
+                started.set()
+                for _ in range(100):
+                    if cancelled():
+                        seen.append("cancelled")
+                        break
+                    time.sleep(0.01)
+                return []
+
+        worker = self._worker(Slow())
+        worker.submit([SimpleNamespace(update="x", entity_id="light.a")], 0.0)
+        self.assertTrue(started.wait(2))
+        self.assertTrue(worker.abandon())
+        for _ in range(200):
+            if not worker.busy:
+                break
+            time.sleep(0.01)
+        self.assertEqual(seen, ["cancelled"])
+
+    def test_a_later_batch_is_not_cancelled_by_an_old_abandon(self):
+        seen = []
+
+        class Record:
+            def apply_light_updates(self, updates, transition_seconds, cancelled=None):
+                seen.append(cancelled())
+                return []
+
+        worker = self._worker(Record())
+        worker.abandon()
+        worker.submit([SimpleNamespace(update="x", entity_id="light.a")], 0.0)
+        for _ in range(100):
+            if seen:
+                break
+            time.sleep(0.01)
+        self.assertEqual(seen, [False])
+
+
+if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -216,10 +218,17 @@ class HomeAssistantClient:
         self,
         updates: list[LightUpdate],
         transition_seconds: float,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[str]:
+        """Send updates, one bulb after another unless parallel is configured.
+
+        ``cancelled`` is asked before each bulb of a sequential send. Whatever it
+        stops is simply not sent, and is not reported as failed.
+        """
+
         grouped_updates = _group_light_updates(updates)
         if len(grouped_updates) <= 1 or self.max_parallel_updates <= 1:
-            failed_batches = self._apply_light_updates_sequential(grouped_updates, transition_seconds)
+            failed_batches = self._apply_light_updates_sequential(grouped_updates, transition_seconds, cancelled)
             return [entity_id for batch in failed_batches for entity_id in batch.entity_ids]
 
         failed_updates = self._apply_light_updates_parallel(
@@ -237,12 +246,15 @@ class HomeAssistantClient:
         self,
         updates: list[LightUpdateBatch],
         transition_seconds: float,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[LightUpdateBatch]:
         failed_updates: list[LightUpdateBatch] = []
         should_delay_before_next_request = False
         for update in updates:
             if should_delay_before_next_request and self.inter_light_delay_seconds > 0:
                 time.sleep(self.inter_light_delay_seconds)
+            if cancelled is not None and cancelled():
+                break
 
             if not self._apply_light_update(update, transition_seconds):
                 failed_updates.append(update)

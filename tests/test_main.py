@@ -4,7 +4,7 @@ import ast
 import unittest
 from types import SimpleNamespace
 
-from matterlights.main import enforce_lights_off
+from matterlights.main import OffGuard, enforce_lights_off
 
 
 class FakeClient:
@@ -17,6 +17,30 @@ class FakeClient:
     def turn_off_lights(self, entity_ids: list[str], transition_seconds: float) -> list[str]:
         self.calls.append(list(entity_ids))
         return [entity_id for entity_id in entity_ids if entity_id in self.failing]
+
+
+class OffGuardTests(unittest.TestCase):
+    class Worker:
+        def __init__(self, landing):
+            self.landing = landing
+            self.busy = landing
+
+        def abandon(self):
+            return self.landing
+
+    def test_a_write_on_its_way_earns_one_more_sweep_once_it_has_landed(self):
+        worker = self.Worker(True)
+        guard = OffGuard(worker)
+        guard.entered()
+        self.assertFalse(guard.resweep_due(), "not while it is still landing")
+        worker.busy = False
+        self.assertTrue(guard.resweep_due())
+        self.assertFalse(guard.resweep_due(), "once")
+
+    def test_nothing_on_its_way_needs_no_second_sweep(self):
+        guard = OffGuard(self.Worker(False))
+        guard.entered()
+        self.assertFalse(guard.resweep_due())
 
 
 class EnforceLightsOffTests(unittest.TestCase):

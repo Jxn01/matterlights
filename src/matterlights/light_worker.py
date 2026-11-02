@@ -23,6 +23,13 @@ collects that result.
 **Latest wins.** If a request arrives while one is in flight, it replaces any
 request still queued rather than joining a queue. A backlog of light updates is
 worthless: by the time a stale one was sent, the screen has moved on.
+
+**Abandon before turning lamps off.** A batch takes seconds, one bulb after
+another, so a colour can land after the sync loop has already switched that bulb
+off and marked it done. Found 2026-11-02 with the master switch: one lamp stayed
+lit, for good, because nothing looks at a lamp marked off. ``abandon`` stops the
+batch at its next bulb and says whether a write may still land, and ``OffGuard``
+in ``main.py`` sweeps once more after it has.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ class LightWorker:
         self._wake = threading.Event()
         self._running = True
         self._in_flight = False
+        self._abandoned = threading.Event()
         self._thread = threading.Thread(target=self._run, name=name, daemon=True)
         self._thread.start()
 
@@ -59,6 +67,19 @@ class LightWorker:
         with self._lock:
             self._pending = (list(states), transition_seconds)
         self._wake.set()
+
+    def abandon(self) -> bool:
+        """Drop what has not started and stop what has at its next bulb.
+
+        Returns True if a write may still land, because one request cannot be
+        taken back once it has left.
+        """
+
+        with self._lock:
+            self._pending = None
+            if self._in_flight:
+                self._abandoned.set()
+            return self._in_flight
 
     def collect(self) -> list[tuple]:
         """Take every finished result: a list of ``(states, failed_entity_ids)``."""
@@ -81,12 +102,13 @@ class LightWorker:
             with self._lock:
                 job, self._pending = self._pending, None
                 self._in_flight = job is not None
+                self._abandoned.clear()
             if job is None:
                 continue
             states, transition_seconds = job
             try:
                 failed = self._client.apply_light_updates(
-                    [state.update for state in states], transition_seconds
+                    [state.update for state in states], transition_seconds, self._abandoned.is_set
                 )
             except Exception:  # noqa: BLE001 - a bulb must not kill the worker
                 self._logger.exception("Light update raised; treating every light as failed")

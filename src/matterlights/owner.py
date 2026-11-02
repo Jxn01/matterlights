@@ -15,6 +15,11 @@ it powers down.
 An instance starts out not owning anything and holds its last answer when Home
 Assistant cannot be read. A restart of Home Assistant must not start a second
 driver, or stop the first.
+
+Letting go is immediate and taking over waits for a second reading. Both
+instances poll, so without that the new owner could act first and have its "off"
+overtaken by the last colour of the old one, a lamp left lit with nobody to
+notice (see ``light_worker``).
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ class OwnerGate:
         self._client = client
         self._logger = logger
         self._owned = False
+        self._taking_over = False
         self._without_reading = False
 
     def owned(self) -> bool:
@@ -54,6 +60,10 @@ class OwnerGate:
             self._without_reading = False
             self._logger.info("%s is readable again", self._entity_id)
         owned = state == self._value
+        if owned and not self._owned and not self._taking_over:
+            self._taking_over = True
+            return
+        self._taking_over = False
         if owned != self._owned:
             self._owned = owned
             self._logger.info("%s is %s: the lights are %s", self._entity_id, state, "ours" if owned else "not ours")
