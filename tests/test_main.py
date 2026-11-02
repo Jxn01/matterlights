@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import ast
+import logging
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 
+from matterlights.light_worker import LightWorker
 from matterlights.main import OffGuard, enforce_lights_off
 
 
@@ -41,6 +45,64 @@ class OffGuardTests(unittest.TestCase):
         guard = OffGuard(self.Worker(False))
         guard.entered()
         self.assertFalse(guard.resweep_due())
+
+
+class LateColourTests(unittest.TestCase):
+    """The real worker and guard against bulbs that are slow enough for the race to happen every time.
+
+    The race was seen once on the real bulbs (2026-11-02) and could not be provoked there on demand, with
+    or without the fix: a batch takes a fraction of a second, so the off has to land inside it. Here it always does.
+    """
+
+    class Bulbs:
+        def __init__(self):
+            self.state = {"a": "off", "b": "off", "c": "off"}
+            self.first_landed = threading.Event()
+            self.go_on = threading.Event()
+
+        def apply_light_updates(self, updates, transition_seconds, cancelled=None):
+            for n, entity in enumerate(updates):
+                if cancelled is not None and cancelled():
+                    break
+                if n == 1:
+                    # The write for this bulb has left, and lands after the off.
+                    self.first_landed.set()
+                    self.go_on.wait(2)
+                self.state[entity] = "on"
+            return []
+
+        def turn_off_lights(self, entity_ids, transition_seconds):
+            for entity in entity_ids:
+                self.state[entity] = "off"
+            return []
+
+    def run_it(self, guarded):
+        bulbs = self.Bulbs()
+        worker = LightWorker(bulbs, logging.getLogger("test"))
+        self.addCleanup(worker.stop)
+        guard = OffGuard(worker)
+        worker.submit([SimpleNamespace(update=e, entity_id=e) for e in ("a", "b", "c")], 0.0)
+        self.assertTrue(bulbs.first_landed.wait(2))
+        confirmed = set()
+        if guarded:
+            guard.entered()
+        enforce_lights_off(bulbs, ["a", "b", "c"], confirmed, 0.0)
+        bulbs.go_on.set()
+        for _ in range(300):
+            if not worker.busy:
+                break
+            time.sleep(0.01)
+        if guarded and guard.resweep_due():
+            confirmed.clear()
+        enforce_lights_off(bulbs, ["a", "b", "c"], confirmed, 0.0)
+        return bulbs.state
+
+    def test_a_late_colour_is_swept_away(self):
+        self.assertEqual(set(self.run_it(guarded=True).values()), {"off"})
+
+    def test_the_test_bites_without_the_guard(self):
+        """Positive control: this is the lamp left lit on 2026-11-02."""
+        self.assertIn("on", self.run_it(guarded=False).values())
 
 
 class EnforceLightsOffTests(unittest.TestCase):
