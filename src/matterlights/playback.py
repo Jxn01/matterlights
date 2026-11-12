@@ -343,6 +343,36 @@ def update_control_switches(path: Path, values: dict[str, bool]) -> ControlState
     return state
 
 
+_KEEP = object()
+
+
+def update_control_selection(path: Path, *, mode=_KEEP, custom_type=_KEEP, capture_target=_KEEP) -> ControlState:
+    """Set the mode, the custom type and/or the capture screen, leaving every other field as it is on disk.
+
+    The lights hub's select mirror (``ha_selects``) writes through this, read at write time like
+    ``update_control_switches``. ``capture_target=None`` is a value (inherit ``SCREEN_CAPTURE_TARGET``);
+    a field not passed is kept. Raises ``ValueError`` -- and writes nothing -- for a state that would not load back
+    (e.g. a pattern with no saved steps).
+    """
+
+    state = load_control_state(path)
+    if mode is not _KEEP:
+        if mode not in (MODE_AUTONOMOUS, MODE_CUSTOM):
+            raise ValueError(f"not a mode: {mode!r}")
+        state = replace(state, mode=mode)
+    if custom_type is not _KEEP:
+        if custom_type not in (CUSTOM_SOLID, CUSTOM_PATTERN):
+            raise ValueError(f"not a custom type: {custom_type!r}")
+        state = replace(state, custom=replace(state.custom, type=custom_type))
+    if capture_target is not _KEEP:
+        state = replace(state, capture_target=_parse_capture_target(capture_target))
+    # Never write a state that would not load back: a "pattern" with no saved steps fails validation, and
+    # load_control_state then answers the DEFAULT state -- master switches, screen and all (found 2026-11-12).
+    control_state_from_payload(control_state_to_payload(state))
+    save_control_state(path, state)
+    return state
+
+
 def control_state_to_payload(state: ControlState) -> dict:
     custom = state.custom
     return {

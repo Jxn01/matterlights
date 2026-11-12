@@ -68,7 +68,7 @@ def main() -> int:
     )
 
     if owned_elsewhere(settings, client):
-        LOGGER.info("Another machine owns the lights; leaving them alone")
+        LOGGER.info("The lights are someone else's (another machine, or manual control); leaving them alone")
         return 0
 
     LOGGER.info("Session ending; turning lights off")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import colorsys
 from dataclasses import dataclass
 import logging
+import sys
 import time
 
 from matterlights.sync_mark import leave_mark
@@ -16,6 +17,7 @@ from matterlights.ambience import (
 from matterlights import capture as _capture
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
+from matterlights.ha_selects import mode_label, start_select_mirror
 from matterlights.ha_switches import start_switch_mirror
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
 from matterlights.light_worker import LightWorker
@@ -31,6 +33,7 @@ from matterlights.screen import (
     ZoneSample,
     capture_raw_with_session,
     capture_session,
+    list_monitors,
     load_configured_light_zones,
     sample_zone_samples_from_screenshot,
 )
@@ -38,6 +41,29 @@ from matterlights.screen import (
 
 LOGGER = logging.getLogger("matterlights")
 FULL_SCREEN_ZONE = ScreenZone("full", 0.0, 0.0, 1.0, 1.0)
+
+
+def _hub_status(owner_gate, owned: bool, control_state, display_on: bool, settings) -> tuple[str, dict]:
+    """What the loop is doing, for the lights hub's status sensor (``HA_STATUS_ENTITY``), with attributes."""
+
+    attributes = {
+        "mode": mode_label(control_state),
+        "screen": effective_capture_target(control_state, settings.screen_capture_target),
+        "os": "Linux" if sys.platform.startswith("linux") else "Windows",
+    }
+    if owner_gate is not None and owner_gate.manual():
+        return "Manual control", attributes
+    if not owned:
+        holder = owner_gate.holder() if owner_gate is not None else None
+        if holder is None or holder == settings.ha_owner_value:
+            return "Starting", attributes                # taking over waits for a second reading
+        return f"{holder} has the lamps", attributes
+    if not control_state.lights_on:
+        return "Lamps off", attributes
+    if not display_on:
+        return "Display asleep", attributes
+    label = mode_label(control_state)
+    return ("Following the screen" if label == "Follow the screen" else label), attributes
 AMBIENT_EDGE_CAPTURE_ZONES: tuple[ScreenZone, ...] = (
     ScreenZone("ambient-top", 0.0, 0.0, 1.0, 0.18),
     ScreenZone("ambient-left", 0.0, 0.12, 0.16, 0.82),
@@ -199,7 +225,8 @@ def main() -> int:
 
     def turn_off_all_lights() -> None:
         if owner_gate is not None and not owner_gate.owned():
-            LOGGER.info("Another machine owns the lights; leaving them alone")
+            LOGGER.info("%s; leaving the lights alone",
+                        "Manual control is on" if owner_gate.manual() else "Another machine owns the lights")
             return
         # Windows allows only a few seconds here. Every light gets identical
         # parameters, so this collapses into a single Home Assistant request --
@@ -226,6 +253,11 @@ def main() -> int:
     # The dashboard's Lights/RGB switches, mirrored to Home Assistant helpers on
     # a thread of their own. None unless HA_*_SWITCH_ENTITY is set.
     switch_mirror = start_switch_mirror(settings, client, LOGGER)
+    # The lights hub's mode / screen selects and status sensor (ha_selects). None unless HA_MODE_ENTITY,
+    # HA_SCREEN_ENTITY or HA_STATUS_ENTITY is set.
+    select_watch = start_select_mirror(settings, client, LOGGER)
+    select_mirror = select_watch[0] if select_watch is not None else None
+    next_monitor_offer = 0.0
 
     def reset_runtime_caches() -> None:
         last_colors.clear()
@@ -258,6 +290,13 @@ def main() -> int:
         with capture_session() as screen_capture_session:
             while True:
                 iteration_started = time.monotonic()
+                if select_mirror is not None and settings.ha_screen_entity and iteration_started >= next_monitor_offer:
+                    # On this thread: Windows' capture library may not be called from the mirror's.
+                    try:
+                        select_mirror.offer_monitors(list_monitors())
+                    except Exception:  # noqa: BLE001 -- a screen list is a convenience, never a reason to stop
+                        LOGGER.debug("Could not list the monitors for Home Assistant", exc_info=True)
+                    next_monitor_offer = iteration_started + 60.0
                 try:
                     current_zone_file_mtime = _path_mtime(settings.light_zone_file)
                     if current_zone_file_mtime != zone_file_mtime:
@@ -294,6 +333,14 @@ def main() -> int:
                     if standing_aside and owned:
                         standing_aside = False
                         reset_runtime_caches()
+                        # Whoever had the lamps meanwhile -- the TV's instance, or the owner in manual control -- may
+                        # have switched them on, so nothing confirmed off before still holds. Forget it and leave the
+                        # off-states, so whichever applies is entered afresh and sweeps every lamp (found 2026-11-12:
+                        # a lamp lit in manual control stayed lit after manual control ended with the lamps switched off).
+                        master_off_active = False
+                        display_off_active = False
+                        master_off_confirmed.clear()
+                        display_off_confirmed.clear()
                         LOGGER.info("The lights are ours again")
 
                     current_time = time.monotonic()
@@ -336,6 +383,8 @@ def main() -> int:
                     ordered_available = [
                         entity_id for entity_id in settings.light_entities if entity_id in available_entity_ids
                     ]
+                    if select_mirror is not None:
+                        select_mirror.set_status(*_hub_status(owner_gate, owned, control_state, display_on, settings))
 
                     if not owned or not control_state.lights_on:
                         if not owned:
@@ -345,7 +394,9 @@ def main() -> int:
                                 standing_aside = True
                                 light_worker.abandon()
                                 reset_runtime_caches()
-                                LOGGER.info("Another machine owns the lights; leaving them alone")
+                                LOGGER.info("%s; leaving them alone",
+                                            "Manual control is on" if owner_gate is not None and owner_gate.manual()
+                                            else "Another machine owns the lights")
                         else:
                             # Master switch: off overrides every mode until re-enabled.
                             just_entered = not master_off_active
@@ -646,6 +697,8 @@ def main() -> int:
         light_worker.stop()
         if switch_mirror is not None:
             switch_mirror.stop()
+        if select_watch is not None:
+            select_watch[1].stop()
         if owner_watch is not None:
             owner_watch[1].stop()
         if display_monitor is not None:

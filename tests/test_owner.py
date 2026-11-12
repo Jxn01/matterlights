@@ -129,6 +129,13 @@ class TheLoopRespectsIt(unittest.TestCase):
         hook = self.source[self.source.index("def turn_off_all_lights"):self.source.index("client.turn_off_lights_urgently(")]
         self.assertIn("owner_gate.owned()", hook)
 
+    def test_taking_the_lights_back_forgets_what_was_confirmed_off(self):
+        at = self.source.index("if standing_aside and owned:")
+        block = self.source[at:self.source.index('LOGGER.info("The lights are ours again")', at)]
+        for line in ("master_off_active = False", "display_off_active = False",
+                     "master_off_confirmed.clear()", "display_off_confirmed.clear()"):
+            self.assertIn(line, block)
+
     def test_the_source_parses(self):
         ast.parse(self.source)
 

@@ -187,6 +187,46 @@ class HomeAssistantClient:
             transition_seconds,
         )
 
+    def call_service(self, domain: str, service: str, data: dict) -> bool:
+        """Call one Home Assistant service, reporting whether it was accepted (never raises)."""
+
+        try:
+            with self._get_session().post(
+                f"{self.base_url}/api/services/{domain}/{service}",
+                json=data,
+                timeout=self.timeout_seconds,
+            ) as response:
+                response.raise_for_status()
+            return True
+        except requests.RequestException as exc:
+            LOGGER.warning("Failed to call %s.%s: %s", domain, service, _concise_request_error(exc))
+            return False
+
+    def select_option(self, entity_id: str, option: str) -> bool:
+        """Set an ``input_select`` to one of its options."""
+
+        return self.call_service("input_select", "select_option", {"entity_id": entity_id, "option": option})
+
+    def set_select_options(self, entity_id: str, options: list[str]) -> bool:
+        """Replace an ``input_select``'s options (the screen select: this machine's monitors)."""
+
+        return self.call_service("input_select", "set_options", {"entity_id": entity_id, "options": list(options)})
+
+    def post_state(self, entity_id: str, state: str, attributes: dict) -> bool:
+        """Write a state Home Assistant does not own (the status sensor; like the heartbeat, never fatal)."""
+
+        try:
+            with self._get_session().post(
+                f"{self.base_url}/api/states/{entity_id}",
+                json={"state": state, "attributes": attributes},
+                timeout=self.timeout_seconds,
+            ) as response:
+                response.raise_for_status()
+            return True
+        except requests.RequestException as exc:
+            LOGGER.debug("Failed to post %s: %s", entity_id, _concise_request_error(exc))
+            return False
+
     def turn_off_lights_urgently(self, entity_ids: list[str], timeout_seconds: float) -> bool:
         """Turn every light off in one request, waiting longer than the sync timeout.
 

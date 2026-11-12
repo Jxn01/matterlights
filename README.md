@@ -204,7 +204,7 @@ because a gaming monitor is the only screen anyone wants this program to sync to
 | Unit | Scope | Purpose |
 | --- | --- | --- |
 | `matterlights-sync.service` | user | the sync loop |
-| `matterlights-dashboard.service` | user | the dashboard |
+| `matterlights-dashboard.service` | user | the dashboard — **installed but not enabled** since 2026-11-12 (*The lights hub*); `systemctl --user start matterlights-dashboard` to edit the saved colour, the pattern or zones |
 | `matterlights-lights-off.service` | **system** | turns the lights off at shutdown |
 
 ```bash
@@ -242,6 +242,11 @@ systemctl --user start matterlights-sync        # or, once installed
 ```
 
 ### Dashboard
+
+> **Since 2026-11-12 the dashboard is not started automatically.** Every daily setting — the lamps and RGB switches,
+> the mode, the capture screen, manual control and what the loop is doing — lives in Home Assistant (*The lights hub*).
+> The dashboard remains the only editor for the **saved colour and pattern** and the way to reach the zone designer;
+> start it by hand when you need those.
 
 The dashboard shows:
 
@@ -436,6 +441,9 @@ This is the only layer that survives events Windows never gets to report — a c
 Two consequences worth knowing:
 
 - On a dual-boot machine, booting the other OS also stops the heartbeat, so the lights turn off once about three minutes in.
+- An instance that is standing aside (another machine owns the lamps, or **manual control** is on) does not refresh the
+  heartbeat, so the automation must be conditioned on manual control being off — `lights_hub.py` in the owner's HA tools
+  adds `condition: state input_boolean.lamps_manual off` (see *The lights hub*).
 - Set `HEARTBEAT_ENTITY_ID=` (empty) to disable publishing the heartbeat entirely.
 
 The automation is not created by this repo's installer — it lives in Home Assistant. The equivalent YAML is:
@@ -493,6 +501,46 @@ How it behaves (`src/matterlights/ha_switches.py`):
 
 Both empty (the default) mirrors nothing and starts no thread.
 
+## The lights hub (Home Assistant)
+
+Since 2026-11-12 every light setting lives in one Home Assistant dashboard (the owner's is `lights.jxn.hu`), and the
+localhost pages no longer start by themselves. Five helpers, each optional:
+
+| Helper | Setting | Who writes it | Direction, first reading |
+| --- | --- | --- | --- |
+| `input_boolean.matterlights_lights` / `_rgb` | `HA_LIGHTS_SWITCH_ENTITY` / `HA_RGB_SWITCH_ENTITY` | either side | both ways; Home Assistant wins the first reading (*Home Assistant switches*) |
+| `input_boolean.lamps_manual` | `HA_MANUAL_ENTITY` | Home Assistant | read only: while **on**, no instance touches the bulbs |
+| `input_select.matterlights_mode` | `HA_MODE_ENTITY` | either side | both ways; options exactly *Follow the screen* / *Saved colour* / *Saved pattern*; Home Assistant wins the first reading (the helper is shared by both halves of a dual boot) |
+| `input_select.matterlights_screen` | `HA_SCREEN_ENTITY` | this machine writes the options | both ways; **this machine wins** the first reading (monitor numbers belong to one OS) |
+| `sensor.matterlights_status` | `HA_STATUS_ENTITY` | this process | written on change and every 10 minutes |
+
+**Manual control.** With `input_boolean.lamps_manual` on, every instance stands aside exactly as if another machine
+owned the lamps — no colours, no switching them off for the master switch or a sleeping display, nothing at shutdown —
+so a colour set in Home Assistant stays. It is a helper of its own, not a value of the owner selector, because that
+selector also picks the soundbar's input. Set `HA_MANUAL_ENTITY` on **every** instance (the TV's gets it from tv-hub's
+deploy), and condition the stale-heartbeat automation on it (*The Home Assistant fallback*). When manual control ends,
+the owner takes the lamps back on its second reading and forgets which lamps it had confirmed off, so an off-state
+(the master switch, a sleeping display) sweeps every lamp again. Verified 2026-11-12 on the real lamps: a colour set in
+Home Assistant survived screen changes, a stale heartbeat (249 s), the shutdown path and the TV's instance; turning
+manual control off put the lamp back under the PC.
+
+**Mode.** *Follow the screen* = autonomous; *Saved colour* / *Saved pattern* = custom mode playing what the control file
+holds. A pattern with no saved steps is refused (the control file is never written in a shape that would not load
+back; Home Assistant is set back to the mode that really runs). The colour and the pattern are still edited in the
+dashboard, started by hand.
+
+**Screen.** The options are *Primary screen*, *All screens* and one per monitor (`Screen 2 · DP-2 · 3840×2160 ·
+primary`; Windows' `\\.\DISPLAYn` names are left out), rewritten whenever the monitors change (checked every minute on
+the capture loop's thread — Windows' capture library may not be called from another). Set `HA_SCREEN_ENTITY` and
+`HA_STATUS_ENTITY` only on the instance that captures the screen, in `.env.linux` / `.env.windows`.
+
+**Status words:** *Following the screen*, *Saved colour*, *Saved pattern*, *Lamps off*, *Display asleep*, *Manual
+control*, *<owner> has the lamps*, *Starting* (taking over waits for a second reading); attributes `mode`, `screen`, `os`.
+
+What the retired pages did that Home Assistant does not: start/stop/restart buttons (use systemd or Task Scheduler),
+the log tail (`journalctl --user -u matterlights-sync`, or the log file), editing the saved colour and pattern, and the
+zone designer (`zoned` / `shared-variant` modes only; ambience mode does not use zones).
+
 ## Two machines, one set of bulbs
 
 The lights can follow a second source: a matterlights on another machine, watching something
@@ -545,7 +593,7 @@ display of its own, and its restart must not darken a room. Packets from anyone 
 ## Windows autostart
 
 
-Install startup tasks for both the sync loop and dashboard:
+Install the startup task for the sync loop (since 2026-11-12 the dashboard no longer starts at logon — *The lights hub*; an older install's dashboard task is removed; start it by hand with `scripts\start-dashboard.ps1` to edit the saved colour, the pattern or zones):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
@@ -626,6 +674,10 @@ All of these files are gitignored (`.env.*`, `.matterlights-*.json`), and
 | `HA_SWITCH_POLL_SECONDS` | `1.0` | How often the switch mirror polls Home Assistant and the control file. Must be greater than 0. |
 | `HA_OWNER_ENTITY` | *(empty: always the owner)* | Entity in Home Assistant naming which instance drives the bulbs. See *Two machines, one set of bulbs*. |
 | `HA_OWNER_VALUE` | *(empty)* | The value of `HA_OWNER_ENTITY` that means this instance. Required with it. |
+| `HA_MANUAL_ENTITY` | *(empty: no manual control)* | An on/off helper (`input_boolean.lamps_manual`). While it is **on**, this instance leaves the bulbs entirely alone — no colours, no switching them off (master switch, display sleep, shutdown) — so a colour set in Home Assistant stays. Set it on **every** instance (tv-hub's deploy copies it to the TV's). See *The lights hub*. |
+| `HA_MODE_ENTITY` | *(empty: not mirrored)* | An `input_select` with exactly the options *Follow the screen*, *Saved colour*, *Saved pattern*, mirrored both ways with the control file's mode (Home Assistant wins the first reading). See *The lights hub*. |
+| `HA_SCREEN_ENTITY` | *(empty: not mirrored)* | An `input_select` whose options this machine writes — *Primary screen*, *All screens* and one entry per monitor — mirrored both ways with the control file's capture screen (this machine wins the first reading: monitor numbers are per OS). Only on the instance that captures the screen; set it in `.env.linux` / `.env.windows`. |
+| `HA_STATUS_ENTITY` | *(empty: no status)* | An entity id this process writes (like the heartbeat): what the loop is doing — *Following the screen*, *Saved colour*, *Saved pattern*, *Lamps off*, *Display asleep*, *Manual control*, *<owner> has the lamps*, *Starting* — with `mode`, `screen` and `os` attributes. Posted on change and every 10 minutes. Only on the screen instance (`.env.<os>`). |
 | `CAPTURE_SOURCE` | `screen` | `screen`, or `tv` for frames from an LG TV. |
 | `TV_FRAME_BIND` | `0.0.0.0` | Address the TV source listens on. |
 | `TV_FRAME_PORT` | `8792` | UDP port the TV source listens on. |

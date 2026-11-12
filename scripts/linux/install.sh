@@ -108,11 +108,14 @@ install_unit() {   # $1 = source unit, $2 = destination dir, $3 = sudo or empty
     echo "  installed $dst"
 }
 
-if ask "Install the user units (sync + dashboard, started with your desktop session)?"; then
+if ask "Install the user units (sync, started with your desktop session; the dashboard installed but started by hand)?"; then
     install_unit matterlights-sync.service      "$USER_UNIT_DIR"
+    # The localhost dashboard is installed but no longer enabled (2026-11-12): daily settings live in Home Assistant's
+    # Lights dashboard (README -> The lights hub). Start it to edit the saved colour, the pattern or zones.
     install_unit matterlights-dashboard.service "$USER_UNIT_DIR"
     systemctl --user daemon-reload
-    systemctl --user enable --now matterlights-sync.service matterlights-dashboard.service
+    systemctl --user enable --now matterlights-sync.service
+    systemctl --user disable --now matterlights-dashboard.service 2>/dev/null || true
     bold "Enabled. Status:"
     systemctl --user --no-pager --lines=0 status matterlights-sync.service || true
 fi
@@ -125,7 +128,8 @@ if ask "Install the system unit that turns the lights off at shutdown (needs sud
 fi
 
 bold "Done."
-echo "  Dashboard:      http://127.0.0.1:$(grep -E '^DASHBOARD_PORT=' "$REPO_ROOT/.env" | cut -d= -f2 || echo 8770)"
+echo "  Settings:       Home Assistant's Lights dashboard (README -> The lights hub)"
+echo "  Edit patterns:  systemctl --user start matterlights-dashboard -> http://127.0.0.1:$(grep -E '^DASHBOARD_PORT=' "$REPO_ROOT/.env" | cut -d= -f2 || echo 8770)"
 echo "  Sync logs:      journalctl --user -u matterlights-sync -f"
 echo "  Stop for now:   systemctl --user stop matterlights-sync"
 echo "  Remove it all:  scripts/linux/uninstall.sh"

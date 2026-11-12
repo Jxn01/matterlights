@@ -78,7 +78,12 @@ class NoConsoleWindowTest(unittest.TestCase):
         text = _read("install-autostart.ps1")
         self.assertIn('".venv\\Scripts\\pythonw.exe"', text)
         self.assertRegex(text, r'-Execute \$pythonw -Argument "-m matterlights" ')
-        self.assertRegex(text, r'-Execute \$pythonw -Argument "-m matterlights\.dashboard" ')
+
+    def test_the_dashboard_no_longer_starts_at_logon_and_an_old_task_goes(self) -> None:
+        """The lights hub (2026-11-12): daily settings live in Home Assistant; the dashboard starts by hand only."""
+        code = _code(_read("install-autostart.ps1"))
+        self.assertNotRegex(code, r'-Argument "-m matterlights\.dashboard"')
+        self.assertRegex(code, r"Unregister-ScheduledTask -TaskName \$DashboardTaskName")
 
     def test_the_logon_tasks_have_no_time_limit(self) -> None:
         # Task Scheduler's default stops a task 72 hours after its trigger started it.
@@ -86,7 +91,7 @@ class NoConsoleWindowTest(unittest.TestCase):
 
     def test_a_refused_registration_stops_the_script(self) -> None:
         calls = re.findall(r"Register-ScheduledTask\b.*?\| Out-Null", _code(_read("install-autostart.ps1")), re.DOTALL)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)   # the sync loop's; the dashboard has no logon task since 2026-11-12
         for call in calls:
             with self.subTest(call=call.split("\n")[1].strip()):
                 self.assertIn("-ErrorAction Stop", call)

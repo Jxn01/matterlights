@@ -39,6 +39,12 @@ class Settings:
     ha_switch_poll_seconds: float = 1.0
     ha_owner_entity: str = ""
     ha_owner_value: str = ""
+    # The lights hub (2026-11-12, matterlights.ha_selects): manual control from Home
+    # Assistant, the mode and screen selects, and a status sensor. Empty = off.
+    ha_manual_entity: str = ""
+    ha_mode_entity: str = ""
+    ha_screen_entity: str = ""
+    ha_status_entity: str = ""
     capture_source: str = "screen"
     tv_frame_bind: str = "0.0.0.0"
     tv_frame_port: int = 8792
@@ -158,6 +164,10 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         ha_switch_poll_seconds=float(get_value("HA_SWITCH_POLL_SECONDS", "1.0")),
         ha_owner_entity=get_value("HA_OWNER_ENTITY", "").strip(),
         ha_owner_value=get_value("HA_OWNER_VALUE", "").strip(),
+        ha_manual_entity=get_value("HA_MANUAL_ENTITY", "").strip(),
+        ha_mode_entity=get_value("HA_MODE_ENTITY", "").strip(),
+        ha_screen_entity=get_value("HA_SCREEN_ENTITY", "").strip(),
+        ha_status_entity=get_value("HA_STATUS_ENTITY", "").strip(),
         capture_source=get_value("CAPTURE_SOURCE", "screen").strip().lower(),
         tv_frame_bind=get_value("TV_FRAME_BIND", "0.0.0.0").strip(),
         tv_frame_port=int(get_value("TV_FRAME_PORT", "8792")),
@@ -369,6 +379,10 @@ def _validate_settings(settings: Settings) -> None:
         ("HA_LIGHTS_SWITCH_ENTITY", settings.ha_lights_switch_entity),
         ("HA_RGB_SWITCH_ENTITY", settings.ha_rgb_switch_entity),
         ("HA_OWNER_ENTITY", settings.ha_owner_entity),
+        ("HA_MANUAL_ENTITY", settings.ha_manual_entity),
+        ("HA_MODE_ENTITY", settings.ha_mode_entity),
+        ("HA_SCREEN_ENTITY", settings.ha_screen_entity),
+        ("HA_STATUS_ENTITY", settings.ha_status_entity),
     ):
         if entity_id and "." not in entity_id:
             raise ValueError(f"{name} must be an entity ID such as input_boolean.example, got {entity_id!r}")

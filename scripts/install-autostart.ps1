@@ -37,7 +37,9 @@ $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interact
 # -- and the dashboard's port is DASHBOARD_PORT in .env, since a task cannot
 # pass an environment variable.
 $syncAction = New-ScheduledTaskAction -Execute $pythonw -Argument "-m matterlights" -WorkingDirectory $repoRoot
-$dashboardAction = New-ScheduledTaskAction -Execute $pythonw -Argument "-m matterlights.dashboard" -WorkingDirectory $repoRoot
+# The localhost dashboard no longer starts at logon (2026-11-12): every daily setting lives in Home Assistant's Lights
+# dashboard (README -> The lights hub). Start it by hand to edit the saved colour, the pattern or zones:
+# scripts\start-dashboard.ps1. An older install's dashboard task is removed here.
 
 # -ErrorAction Stop on each: Register-ScheduledTask reports a failure as a
 # non-terminating error, and without it an "Access is denied" scrolls past with
@@ -51,14 +53,10 @@ Register-ScheduledTask `
     -Principal $principal `
     -Force -ErrorAction Stop | Out-Null
 
-Register-ScheduledTask `
-    -TaskName $DashboardTaskName `
-    -Description "Run the MatterLights local control dashboard on localhost." `
-    -Action $dashboardAction `
-    -Trigger $trigger `
-    -Settings $settings `
-    -Principal $principal `
-    -Force -ErrorAction Stop | Out-Null
+if (Get-ScheduledTask -TaskName $DashboardTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $DashboardTaskName -Confirm:$false -ErrorAction Stop
+    Write-Host "Removed the retired logon task '$DashboardTaskName' (the dashboard now starts by hand only)."
+}
 
 try {
     Start-ScheduledTask -TaskName $SyncTaskName -ErrorAction Stop
@@ -67,12 +65,5 @@ catch {
     Write-Host "Sync task '$SyncTaskName' could not be started immediately: $($_.Exception.Message)"
 }
 
-try {
-    Start-ScheduledTask -TaskName $DashboardTaskName -ErrorAction Stop
-}
-catch {
-    Write-Host "Dashboard task '$DashboardTaskName' could not be started immediately: $($_.Exception.Message)"
-}
-
-Write-Host "Installed scheduled tasks '$SyncTaskName' and '$DashboardTaskName' for $currentUser."
-Write-Host "Both run .venv\Scripts\pythonw.exe at logon. A copy that was already running keeps its old definition until it next starts; log off and on to be sure."
+Write-Host "Installed scheduled task '$SyncTaskName' for $currentUser."
+Write-Host "It runs .venv\Scripts\pythonw.exe at logon. A copy that was already running keeps its old definition until it next starts; log off and on to be sure."
