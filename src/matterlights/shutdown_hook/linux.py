@@ -11,12 +11,11 @@ system-level ``matterlights-lights-off.service`` is for, and why its ``ExecStop`
 is ordered after ``network-online.target`` -- units stop in reverse dependency
 order, so it runs while the network still works.
 
-⚠️ **The previous handler is chained, never swallowed.** Replacing Python's
+**The previous handler is chained, never swallowed.** Replacing Python's
 default SIGINT handler without calling on to it would leave a process that cannot
-be interrupted with Ctrl-C, which is a genuinely hostile thing to do to whoever
-is debugging at 2am.
+be interrupted with Ctrl-C, which is hostile to whoever is debugging.
 
-⚠️ **Signal handlers can only be installed from the main thread.** Called from
+**Signal handlers can only be installed from the main thread.** Called from
 anywhere else, ``signal.signal`` raises ``ValueError``; the factory degrades to a
 no-op hook rather than taking the process down over it.
 """

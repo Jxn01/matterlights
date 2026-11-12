@@ -1,11 +1,10 @@
 """Every module in the package must import on the platform it claims to support.
 
-This is the guard for a whole CLASS of bug, not one instance of it. Until
-2026-09-08 ``screen.py`` began with ``from ctypes import windll`` at module
-scope, so importing *anything* that reached it -- ``home_assistant``,
-``playback``, ``main``, the old ``dashboard`` -- raised ``ImportError`` on Linux. The
-package was not "mostly portable with a few Windows bits"; it was entirely
-unusable off Windows, and nothing in the build said so.
+This is the guard for a whole CLASS of bug, not one instance of it. A
+``from ctypes import windll`` at module scope in ``screen.py`` would make importing
+*anything* that reached it -- ``home_assistant``, ``playback``, ``main`` -- raise
+``ImportError`` on Linux. The package would not be "mostly portable with a few Windows bits"; it would be entirely
+unusable off Windows, and nothing in the build would say so.
 
 A platform-specific import at module scope is invisible on the platform it was
 written on. Only the other platform notices, and only at runtime. This test is

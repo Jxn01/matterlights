@@ -1,6 +1,6 @@
 """Whether the sync loop has driven the lights since boot.
 
-A shutdown must not darken the room when nothing was syncing: Garuda is also powered on and off with nobody at it. So the loop leaves a
+A shutdown must not darken the room when nothing was syncing: the machine can be powered on and off with nobody at it. So the loop leaves a
 mark when it starts, and the shutdown layer on Linux only acts if it finds one. The mark lives in a folder of the SYSTEM unit, because
 /run/user/1000 is torn down with the session, before that unit stops. /run empties at every boot, which is what makes it mean "this boot".
 

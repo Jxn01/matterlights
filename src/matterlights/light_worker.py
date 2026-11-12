@@ -1,14 +1,13 @@
 """Apply Home Assistant light updates off the capture loop.
 
-🚨 **A bulb that stops answering must not be able to stall screen capture.**
+**A bulb that stops answering must not be able to stall screen capture.**
 
-Home Assistant writes are network calls with a multi-second timeout. Making them
-inline in the sync loop meant one unreachable Matter bulb froze *everything* for
+Home Assistant writes are network calls with a multi-second timeout. Made
+inline in the sync loop, one unreachable Matter bulb would freeze *everything* for
 the length of that timeout: no capture, no sampling, and -- because the RGB
 extension is fed from the same loop -- no frames for its consumer either. The
-extension then went dark on its staleness rule, correctly, and the whole case
-blanked every time a single flaky bulb timed out. Measured on 2026-09-10: two
-blackouts in three minutes, each exactly as long as the Home Assistant timeout.
+extension would then go dark on its staleness rule every time a single flaky
+bulb timed out.
 
 So the call runs here instead, and the loop never waits for it.
 
@@ -26,8 +25,8 @@ worthless: by the time a stale one was sent, the screen has moved on.
 
 **Abandon before turning lamps off.** A batch takes seconds, one bulb after
 another, so a colour can land after the sync loop has already switched that bulb
-off and marked it done. Found 2026-11-02 with the master switch: one lamp stayed
-lit, for good, because nothing looks at a lamp marked off. ``abandon`` stops the
+off and marked it done. One lamp could stay
+lit for good, because nothing looks at a lamp marked off. ``abandon`` stops the
 batch at its next bulb and says whether a write may still land, and ``OffGuard``
 in ``main.py`` sweeps once more after it has.
 """

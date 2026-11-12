@@ -6,7 +6,7 @@ DPMS values are the X11 ones Mutter inherited:
 
     0 = on, 1 = standby, 2 = suspend, 3 = off, -1 = unknown
 
-⚠️ **-1 is treated as ON.** "Unknown" is not "off", and the two must not be
+**-1 is treated as ON.** "Unknown" is not "off", and the two must not be
 collapsed: reading an unknown state as off turns the lights out in an occupied
 room. The whole module is biased that way -- every failure path reports the
 display as on.

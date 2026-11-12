@@ -258,13 +258,12 @@ class HomeAssistantClient:
         get seconds, not minutes, and cannot retry -- the process is about to be
         killed. The normal :attr:`timeout_seconds` is tuned for a sync loop that
         retries every tick, and is too short here: a grouped turn_off usually
-        answers in ~0.2s but has been measured taking over 3s when the Matter
+        answers in ~0.2s but can take over 3s when the Matter
         bridge is busy, which silently left half the bulbs on.
 
         Returns True if Home Assistant accepted the call. A timeout is a real
-        warning sign, not a formality: when this timed out at 3s during testing,
-        only two of six bulbs had actually gone off and one was still on twenty
-        minutes later. Disconnecting cancels the rest of the service call, so
+        warning sign, not a formality: a call that times out at 3s can leave some
+        bulbs on. Disconnecting cancels the rest of the service call, so
         "the request was sent" is not the same as "the lights are off".
         """
 

@@ -84,7 +84,7 @@ class ShutdownHookTests(unittest.TestCase):
 
         An app that does not answer within HungAppTimeout (~5s) gets the "this
         app is preventing you from restarting" screen, so the turn-off must not
-        run inline -- it has been measured taking over 3s under contention.
+        run inline -- it can take over 3s under contention.
         """
 
         release = threading.Event()

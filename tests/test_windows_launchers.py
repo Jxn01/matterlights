@@ -4,10 +4,8 @@ On Windows 11 the default console is Windows Terminal, and Windows Terminal
 ignores `-WindowStyle Hidden`: it draws the window itself, while every
 process-level check reports no window at all. So `powershell -WindowStyle
 Hidden -File ...` -- as a scheduled task, or through `Start-Process` -- put a
-terminal on the taskbar. On the author's machine the live logon tasks were
-switched to `pythonw.exe` by hand on 2026-07-19 while `install-autostart.ps1`
-kept the old form, so re-running it would have silently brought the window
-back. `pythonw` is a GUI-subsystem binary that never allocates a console, so
+terminal on the taskbar. A script that registers the old form would silently
+bring the window back on every re-run. `pythonw` is a GUI-subsystem binary that never allocates a console, so
 there is nothing left to hide.
 
 These read the scripts as text, so they run everywhere. Comments are stripped
@@ -80,7 +78,7 @@ class NoConsoleWindowTest(unittest.TestCase):
         self.assertRegex(text, r'-Execute \$pythonw -Argument "-m matterlights" ')
 
     def test_the_dashboard_no_longer_starts_at_logon_and_an_old_task_goes(self) -> None:
-        """The lights hub (2026-11-12): every setting lives in Home Assistant and the dashboard is gone; an old task is removed."""
+        """Every setting lives in Home Assistant and there is no dashboard; an old task is removed."""
         code = _code(_read("install-autostart.ps1"))
         self.assertNotRegex(code, r'-Argument "-m matterlights\.dashboard"')
         self.assertRegex(code, r"Unregister-ScheduledTask -TaskName \$DashboardTaskName")
@@ -91,7 +89,7 @@ class NoConsoleWindowTest(unittest.TestCase):
 
     def test_a_refused_registration_stops_the_script(self) -> None:
         calls = re.findall(r"Register-ScheduledTask\b.*?\| Out-Null", _code(_read("install-autostart.ps1")), re.DOTALL)
-        self.assertEqual(len(calls), 1)   # the sync loop's; the dashboard has no logon task since 2026-11-12
+        self.assertEqual(len(calls), 1)   # the sync loop's; the dashboard has no logon task
         for call in calls:
             with self.subTest(call=call.split("\n")[1].strip()):
                 self.assertIn("-ErrorAction Stop", call)

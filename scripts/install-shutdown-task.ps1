@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     The in-process shutdown hook (matterlights.shutdown_hook) cannot be relied
-    on by itself. Measured across six shutdowns and two restarts it never fired,
+    on by itself. Across several shutdowns and restarts it never fired,
     even though its window was alive and answering messages -- the process that
     owns that window is a child of the venv launcher stub and is torn down with
     it, without its message pump ever seeing WM_ENDSESSION.
@@ -52,8 +52,8 @@ $arguments = "-m matterlights.lights_off"
 
 # Runs as SYSTEM, deliberately, NOT as the logged-on user.
 #
-# Registered first as an interactive task, it fired correctly one second after
-# event 1074 and then failed with 0xC000026B (STATUS_DLL_INIT_FAILED_LOGOFF):
+# As an interactive task it fires one second after event 1074 and then fails
+# with 0xC000026B (STATUS_DLL_INIT_FAILED_LOGOFF):
 # "the application failed to initialize because the window station is shutting
 # down". By the time event 1074 is logged the interactive session is already
 # being destroyed, and Windows will not start a new process in it -- which is

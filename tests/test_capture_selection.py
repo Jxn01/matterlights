@@ -1,4 +1,4 @@
-"""R1: the portal is chosen by desktop identity, never by a Mutter error."""
+"""The portal is chosen by desktop identity, never by a Mutter error."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class SourceSelectionTest(unittest.TestCase):
         self.assertIs(mutter.return_value, source)
 
     def test_a_mutter_failure_does_NOT_fall_back_to_the_portal(self) -> None:
-        """The whole point of R1.
+        """The whole point of the selection rule.
 
         A Mutter constructor that raises means GNOME answered badly, not that we
         are on KDE. Falling back here would raise a consent dialog at login that

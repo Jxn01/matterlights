@@ -1,4 +1,4 @@
-"""The shutdown helper must not drag in the capture stack. (R2)
+"""The shutdown helper must not drag in the capture stack.
 
 ``matterlights.lights_off`` runs from a SYSTEM unit, as root, while the machine
 is shutting down, with no session bus. It exists to get exactly one HTTP request
@@ -9,8 +9,8 @@ go off at shutdown.
 
 This is easy to violate by accident and impossible to notice by hand: the chain
 runs lights_off -> home_assistant -> screen (for RgbColor), and a single
-module-scope ``from matterlights import capture`` in screen.py is enough. That
-had in fact happened, and this test is what found it.
+module-scope ``from matterlights import capture`` in screen.py is enough. This test
+catches it.
 
 Run in a subprocess because the check is on a FRESH interpreter's sys.modules;
 the test runner has already imported half the package.

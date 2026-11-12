@@ -3,7 +3,7 @@
 The GStreamer pipeline is stubbed out throughout. What is being tested here is
 the logic around it -- which target resolves to which rectangle, what happens
 when no new frame arrives, and whether an invalidated session actually rebuilds.
-Whether frames flow is not a unit-testable property; that is verified live.
+Whether frames flow is not a unit-testable property; that is verified on a real session.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from fixtures.mutter_display_state import DISPLAY_STATE
 
 
 class MonitorGeometryTest(unittest.TestCase):
-    """Against the real recorded state of this rig's three screens."""
+    """Against the real recorded state of a three-screen setup."""
 
     def setUp(self) -> None:
         self.monitors = parse_monitors(DISPLAY_STATE)
@@ -75,7 +75,7 @@ class MonitorGeometryTest(unittest.TestCase):
 
 
 class CapsFramerateTest(unittest.TestCase):
-    """R3: the cap is derived from the sync interval, never hard-coded."""
+    """The cap is derived from the sync interval, never hard-coded."""
 
     def test_the_sampling_rate_itself(self) -> None:
         self.assertEqual(20, caps_framerate(0.05))
@@ -199,7 +199,7 @@ class BackendBehaviourTest(unittest.TestCase):
         self.assertEqual(["primary", "3"], self.source.opened)
 
     def test_invalidation_rebuilds_exactly_once(self) -> None:
-        """R4: a closed session or a changed layout must rebuild, and only once."""
+        """A closed session or a changed layout must rebuild, and only once."""
 
         self.backend.grab("primary")
         self.source.invalidate("monitor layout changed")
@@ -208,7 +208,7 @@ class BackendBehaviourTest(unittest.TestCase):
         self.assertEqual(2, len(self.backend.started))
 
     def test_unplugged_screen_falls_back_and_keeps_asking_for_the_original(self) -> None:
-        """R4: the connector check is what makes this fire.
+        """The connector check is what makes this fire.
 
         Re-resolving the index would not: unplug the middle screen of three and
         index 2 still resolves happily, just to a different monitor.
@@ -237,10 +237,10 @@ if __name__ == "__main__":
 class TransientDBusErrorTest(unittest.TestCase):
     """Mutter refusing *for now* must not look like Mutter being broken.
 
-    Found live on 2026-09-08: as the monitor powered down, Mutter closed the
-    screencast session, and 687 ms later -- before this program's own
+    As the monitor powers down, Mutter closes the screencast session, and
+    687 ms later -- before this program's own
     display-power watcher had noticed -- the loop tried to rebuild it.
-    ``CreateSession`` answered "Session creation inhibited", which escaped as an
+    ``CreateSession`` answers "Session creation inhibited", which would escape as an
     unhandled ``GLib.Error`` and produced an ERROR-level traceback plus a
     five-second retry backoff, 7 ms before the display-off path would have run.
     """

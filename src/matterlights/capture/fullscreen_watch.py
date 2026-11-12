@@ -1,12 +1,10 @@
 """Exclusive fullscreen on Windows: notice it, say what the capture delivered, re-create the duplication if it starves.
 
-The owner's A/B (Warframe, 2026-10-25): **borderless fullscreen kept the lights in sync; exclusive fullscreen turned
-them all black.** The log of that weekend could not say why. With the lamps switched off, the loop runs the RGB-only
-path, which decided "screen dark" without a log line; and dxcam logs only a lost duplication
-(``DXGI_ERROR_ACCESS_LOST``, which it recovers from by itself), never a duplication that simply stops delivering
-(``AcquireNextFrame`` timing out, which dxcam reports as "no new frame" and the backend answers by reusing the last
-frame). Nothing was logged during play, so the capture either delivered black frames or delivered none. This
-module makes the next exclusive-fullscreen session tell the two apart:
+In exclusive fullscreen the lights can go black while borderless fullscreen stays in sync. dxcam logs only a lost
+duplication (``DXGI_ERROR_ACCESS_LOST``, which it recovers from by itself), never a duplication that simply stops
+delivering (``AcquireNextFrame`` timing out, which dxcam reports as "no new frame" and the backend answers by
+reusing the last frame). So the capture may have delivered black frames or none, and nothing says which. This
+module tells the two apart:
 
 * the shell's notification state (``SHQueryUserNotificationState``; 3 = ``QUNS_RUNNING_D3D_FULL_SCREEN``) is polled
   once a second, and every change is logged with what the capture delivered just before it: fresh and reused frame
@@ -15,7 +13,7 @@ module makes the next exclusive-fullscreen session tell the two apart:
 * while it is exclusive and no fresh frame has arrived for ``STARVE_SECONDS``, the backend is asked to re-create its
   camera (at most ``MAX_RECREATES`` per exclusive episode, ``STARVE_SECONDS`` apart). Microsoft documents that a
   full-screen application normally invalidates the duplication with ``DXGI_ERROR_ACCESS_LOST``; this covers the
-  silent case the weekend log points at, and logs that it did.
+  silent case and logs that it did.
 
 Pure: the clock, the shell state and the frames come in as arguments, so every rule runs in the Linux test suite.
 """

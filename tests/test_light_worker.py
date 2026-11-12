@@ -45,7 +45,7 @@ class LightWorkerTest(unittest.TestCase):
         return worker
 
     def test_submit_returns_immediately_even_when_the_call_blocks(self) -> None:
-        """🚨 The whole point: a bulb timing out froze capture for 3 seconds."""
+        """The whole point: a bulb timing out must not freeze capture."""
 
         client = _Client(delay=1.0)
         worker = self._worker(client)
@@ -131,7 +131,7 @@ class LightWorkerTest(unittest.TestCase):
 
 
 class AbandonTest(unittest.TestCase):
-    """A colour must not land after the lamp was switched off (2026-11-02)."""
+    """A colour must not land after the lamp was switched off."""
 
     def _worker(self, client):
         worker = LightWorker(client, logging.getLogger("test"))

@@ -1,7 +1,7 @@
 """A shutdown must not darken the room when the sync loop never ran.
 
-jxn-files powers Garuda on and off with nobody at it, and matterlights-lights-off.service fires at every shutdown. Without this the
-owner's lights would go out whenever the file server finished with the machine.
+A machine can be powered on and off with nobody at it, and matterlights-lights-off.service fires at every shutdown. Without this
+the lights would go out every time, even though the sync loop never ran.
 """
 from __future__ import annotations
 

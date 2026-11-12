@@ -31,8 +31,8 @@ class TurnOffLightsUrgentlyTests(unittest.TestCase):
 
     def test_uses_its_own_timeout_rather_than_the_sync_timeout(self) -> None:
         # The sync timeout is tuned for a loop that retries every tick. Session
-        # end gets one attempt, and a grouped turn_off has been measured taking
-        # over 3s when the Matter bridge is busy -- which left half the bulbs on.
+        # end gets one attempt, and a grouped turn_off can take
+        # over 3s when the Matter bridge is busy -- which leaves half the bulbs on.
         with patch.object(HomeAssistantClient, "_post_light_service", return_value=True) as post:
             self.assertTrue(self._client().turn_off_lights_urgently(["a", "b"], 10.0))
 

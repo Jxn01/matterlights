@@ -11,7 +11,7 @@ LOGGER = logging.getLogger(__name__)
 def _backend():
     """Import the capture package lazily, on first actual use.
 
-    ⚠️ **Deliberately not a module-scope import.** ``home_assistant`` imports
+    **Deliberately not a module-scope import.** ``home_assistant`` imports
     ``RgbColor`` from here, and ``lights_off`` imports ``home_assistant`` -- so a
     top-level ``import matterlights.capture`` in this module drags the whole
     capture stack into the shutdown helper.
@@ -140,11 +140,9 @@ def list_monitors() -> list[dict[str, int | bool | str]]:
 class _CaptureSession:
     """Context manager owning the capture backend for a long-running loop.
 
-    The sync loop used to construct ``mss.MSS()`` itself and pass the handle
-    down, which put a Windows-only type in ``main.py``'s import list and made
-    the loop responsible for a resource it knew nothing about. The backend owns
-    its session now -- an MSS handle on Windows, a PipeWire stream on Linux --
-    and this is simply the handle callers hold onto.
+    The backend owns its session -- an MSS handle on Windows, a PipeWire
+    stream on Linux -- and this is simply the handle callers hold onto, so the
+    loop knows nothing about the resource.
     """
 
     def __enter__(self):

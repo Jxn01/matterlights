@@ -35,7 +35,7 @@ $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interact
 # binary and never has a console, so there is no window to hide. Startup errors
 # go to the log -- LOG_PATH in .env, or %LOCALAPPDATA%\matterlights\matterlights.log.
 $syncAction = New-ScheduledTaskAction -Execute $pythonw -Argument "-m matterlights" -WorkingDirectory $repoRoot
-# Every setting lives in Home Assistant (README -> Home Assistant); an older install's dashboard task is removed below.
+# Every setting lives in Home Assistant; an older install's dashboard task is removed below.
 
 # -ErrorAction Stop on each: Register-ScheduledTask reports a failure as a
 # non-terminating error, and without it an "Access is denied" scrolls past with

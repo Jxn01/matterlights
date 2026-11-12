@@ -5,8 +5,8 @@ packet per frame: ``b"JXNF"``, then ``!IHHB`` (sequence, width, height, flag),
 then packed RGB. The flag says what the TV is showing:
 
 * ``FRAMES``: a picture, sampled like any screen.
-* ``PROTECTED``: the TV will not hand the picture over (Netflix) and the owner
-  chose a warm glow for that. A steady warm frame.
+* ``PROTECTED``: the TV will not hand the picture over (Netflix) and a warm glow
+  stands in for it. A steady warm frame.
 * ``IDLE``: nothing to follow -- its own Home screen, the screen saver, standby,
   the lights not being the TV's. Black.
 

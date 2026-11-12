@@ -1,5 +1,5 @@
 """capture/fullscreen_watch.py: exclusive fullscreen is logged with what the capture delivered, and a starved
-Desktop Duplication is re-created (bounded). Owner's A/B 2026-10-25: borderless kept sync, exclusive went black."""
+Desktop Duplication is re-created (bounded)."""
 
 import unittest
 

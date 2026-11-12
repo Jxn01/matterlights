@@ -1,8 +1,8 @@
 """Every text-mode file or pipe names its encoding.
 
 Leave it out and Python uses the locale's code page: UTF-8 on Linux, the ANSI
-code page on Windows -- 1252 on this rig's Windows half, read from its
-registry. The same line then reads a file one way here and another way there.
+code page on Windows -- 1252 on a Western-European install.
+The same line then reads a file one way here and another way there.
 `⚠️` is the bytes `E2 9A A0 EF B8 8F`; cp1252 has no character for `8F` and
 raises, while cp1250, Central Europe's, turns the lot into `âš ď¸Ź` without a
 word. Linux can show neither, because its locale *is* UTF-8 -- so a suite that
@@ -10,12 +10,11 @@ is green here says nothing about it.
 
 Naming it is the point, not UTF-8 everywhere. The files these projects write are
 UTF-8, but a Windows console program writes a pipe in the console's OEM code
-page -- 850 on that same machine -- which Python calls `"oem"`.
+page -- 850 there -- which Python calls `"oem"`.
 
 Python names every such call at runtime (`python -X warn_default_encoding`), but
 only on a path some test executes. This reads the source instead, so a call
-nothing runs is caught too: its first run found three the runtime flag had
-missed, in matterlights' service control, one of them on the Windows-only path.
+nothing runs is caught too, including on Windows-only paths.
 By syntax alone it flags these, when no encoding is passed:
 
 * `open(...)` with no mode or a literal text mode;

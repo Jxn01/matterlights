@@ -1,11 +1,10 @@
 """Windows capture: DXGI Desktop Duplication (dxcam), falling back to mss/GDI.
 
 WHY THIS EXISTS. mss captures by BitBlt-ing from the screen DC. Sustained
-full-screen GDI readback on this rig (RTX 5090, five displays, 4K HDR primary)
+full-screen GDI readback with several displays and a 4K HDR primary
 makes the compositor mis-draw the mouse cursor at the capture origin -- it
 visibly snaps to the top-left of the captured monitor several times a second,
-and the text caret in other applications flickers with it. Measured 2026-09-08:
-with MatterLights stopped, a bare capture loop reproduced it on its own after
+and the text caret in other applications flickers with it. With MatterLights stopped, a bare capture loop reproduced it on its own after
 roughly two minutes of sustained grabbing, and it stopped the moment capture
 stopped. GetCursorPos never moves during this, so nothing is moving the pointer
 -- it is purely a compositing artifact of the GDI screen readback.
@@ -19,10 +18,9 @@ Two dxcam behaviours callers must not trip over:
   * A camera is bound to ONE output, so the "all monitors" target cannot use it.
 Anything unsupported falls back to mss, so behaviour never regresses.
 
-This module was lifted out of ``screen.py`` unchanged when the Linux port split
-capture from colour sampling. Its logic is the same code that has been running
-on Windows since 2026-09-08; the only additions are the ``CaptureBackend``
-wrapper and monitor enumeration moving behind the shared ``Monitor`` type.
+This module was lifted out of ``screen.py`` when the Linux port split capture
+from colour sampling; the additions are the ``CaptureBackend`` wrapper and
+monitor enumeration behind the shared ``Monitor`` type.
 """
 
 from __future__ import annotations
@@ -133,7 +131,7 @@ def _drop_camera(key: tuple[int, int]) -> None:
     """Release and forget a camera, so the next grab builds a new one.
 
     Releasing matters: dxcam keeps one instance per output and hands an unreleased one straight back from
-    ``dxcam.create``, so merely forgetting it (what the failure path used to do) re-used the broken camera.
+    ``dxcam.create``, so merely forgetting it re-uses the broken camera.
     """
     with _DXCAM_LOCK:
         camera = _DXCAM_CAMERAS.pop(key, None)

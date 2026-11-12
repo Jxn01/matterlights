@@ -208,9 +208,9 @@ class PerOsConfigTests(unittest.TestCase):
 
 
 class ExampleEnvKeepsStateFilesPerOsTests(unittest.TestCase):
-    """🚨 .env.example pinned all the state files to one shared name, so every
-    install made from it defeated the per-OS defaults -- on a shared checkout,
-    both OSes then read and overwrote one zone layout."""
+    """``.env.example`` must not pin the state files to one shared name: every
+    install made from it would defeat the per-OS defaults, and on a shared checkout
+    both OSes would read and overwrite one zone layout."""
 
     STATE_KEYS = ("LIGHT_ZONE_FILE", "CONTROL_STATE_FILE")
 

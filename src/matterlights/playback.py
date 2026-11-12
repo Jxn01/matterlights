@@ -108,7 +108,7 @@ def _default_custom_state() -> CustomState:
         type=CUSTOM_SOLID,
         brightness=255,
         solid_color=RgbColor(255, 255, 255),
-        # The 10-second loop from the README: red holds 3s, fades to blue over 1s,
+        # The default 10-second loop: red holds 3s, fades to blue over 1s,
         # blue holds 4s, fades to yellow over 2s, then snaps back to red.
         pattern_steps=(
             PatternStep(RgbColor(255, 0, 0), hold=3.0, transition=0.0),
@@ -293,8 +293,7 @@ def save_control_state(path: Path, state: ControlState) -> None:
 
     Several threads write this file -- the sync loop's Home Assistant mirrors
     (switches, selects, hub helpers) -- and the sync loop reads it whenever its
-    mtime moves (the localhost dashboard was a second writing process until
-    2026-11-12). ``write_text`` truncates first, so a reader could catch it empty or
+    mtime moves. ``write_text`` truncates first, so a reader could catch it empty or
     half-written, and ``load_control_state`` reads a broken file as the
     *default* state: autonomous mode, lights on. Writing beside it and renaming
     over it means a reader sees the old file or the new one, never a torn one.
@@ -394,7 +393,7 @@ def update_control_selection(
     if custom:
         state = replace(state, custom=replace(state.custom, **custom))
     # Never write a state that would not load back: a "pattern" with no saved steps fails validation, and
-    # load_control_state then answers the DEFAULT state -- master switches, screen and all (found 2026-11-12).
+    # load_control_state then answers the DEFAULT state -- master switches, screen and all.
     control_state_from_payload(control_state_to_payload(state))
     save_control_state(path, state)
     return state
@@ -580,7 +579,7 @@ def _clamp_channel(value: object) -> int:
     return max(0, min(255, number))
 
 
-# --- the pattern as one line of text (the lights hub's pattern field, 2026-11-12) -------------------------------------
+# --- the pattern as one line of text (the lights hub's pattern field) -------------------------------------
 # A step is a colour (`#ff3300` or `ff3300`) or a white (`2700K`), then the hold and the optional transition in
 # seconds; steps are separated by `,` or `;`. Example: `#ff3300 2 1, 2700K 3 0.5, #0044ff 2`.
 

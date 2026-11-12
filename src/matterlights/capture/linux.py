@@ -1,7 +1,7 @@
 """Linux capture: a PipeWire node rendered into BGRx frames by GStreamer.
 
 WHY NOT mss. On GNOME Wayland, X11 screen capture returns a **black frame**.
-Measured on this rig 2026-09-08: ``mss`` enumerates all three monitors with
+Measured on GNOME Wayland: ``mss`` enumerates all three monitors with
 correct geometry and every single pixel of every grab is zero. That is not a bug
 in mss -- XWayland is a real X server and knows the layout Mutter tells it, but
 native Wayland windows are never composited into the X11 root window, so there is
@@ -46,7 +46,7 @@ _FIRST_FRAME_TIMEOUT_SECONDS = 10.0
 def select_source(logger: logging.Logger | None = None):
     """Choose the node source by DESKTOP IDENTITY, never by catching an error.
 
-    This is R1, and it is the most important rule in the Linux backend.
+    This is the most important rule in the Linux backend.
 
     The portal is picked only when ``org.gnome.Mutter.ScreenCast`` is not a name
     on the session bus -- that is, when this is not GNOME. A Mutter call that
@@ -88,13 +88,12 @@ def select_source(logger: logging.Logger | None = None):
 def caps_framerate(sync_interval_seconds: float) -> int:
     """Frames per second to allow: the sampling rate itself, at least 1.
 
-    It was twice the sampling rate until 2026-11-12, so a frame was always
-    fresher than the tick that read it. But every frame Mutter hands over costs
+    A higher cap would make every frame fresher than the tick that reads it, but
+    every frame Mutter hands over costs
     gnome-shell a copy of the whole monitor -- while gaming, gnome-shell fell
     from 48 % to 33 % of a core with this stream stopped, at 40 fps -- and the
     lights cannot show the difference: the bulbs update at 5 Hz, and the frame a
-    tick reads is now at most one tick (50 ms at 20 Hz) old. The owner chose
-    the cheaper stream.
+    tick reads is at most one tick (50 ms at 20 Hz) old.
     """
 
     if sync_interval_seconds <= 0:
@@ -188,7 +187,7 @@ class LinuxCaptureBackend:
     def set_fallback_target(self, capture_target: str) -> None:
         """The target to fall back to when the requested one disappears.
 
-        Mirrors the behaviour the README already promises on Windows: a screen
+        Mirrors the Windows behaviour: a screen
         that is unplugged or powered off logs a warning and the loop reverts to
         ``SCREEN_CAPTURE_TARGET`` until it returns.
         """

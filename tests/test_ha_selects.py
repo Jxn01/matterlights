@@ -1,4 +1,4 @@
-"""The lights hub (2026-11-12): manual control, the mode and screen selects, the status sensor."""
+"""The lights hub: manual control, the mode and screen selects, the status sensor."""
 from __future__ import annotations
 
 import logging

@@ -226,7 +226,7 @@ class SerializationTests(unittest.TestCase):
         self.assertEqual(load_control_state(None).mode, MODE_AUTONOMOUS)
 
     def test_default_pattern_matches_documented_ten_second_loop(self) -> None:
-        # The README's example: a 10-second loop.
+        # The documented example: a 10-second loop.
         steps = default_control_state().custom.pattern_steps
         self.assertEqual(pattern_cycle_seconds(steps), 10.0)
         self.assertEqual([step.color.as_list() for step in steps], [[255, 0, 0], [0, 0, 255], [255, 255, 0]])

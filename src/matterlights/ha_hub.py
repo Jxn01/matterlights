@@ -1,7 +1,6 @@
-"""The lights hub, part two (2026-11-12): every setting the localhost pages held, as Home Assistant helpers.
+"""The lights hub, part two: every light setting as a Home Assistant helper.
 
-The owner: *"I want no configurable anything remaining in localhost, everything should move into HA."* With
-``HA_HUB_PREFIX`` set (e.g. ``matterlights``) this mirrors, both ways, these helpers (``<p>`` = the prefix):
+With ``HA_HUB_PREFIX`` set (e.g. ``matterlights``) this mirrors, both ways, these helpers (``<p>`` = the prefix):
 
 =====================================  ======================================================================
 ``input_number.<p>_brightness``        the saved colour / pattern brightness, 1-100 % (control file 1-255)
@@ -217,7 +216,7 @@ class HubMirror:
             update_control_selection(self._path, pattern_steps=parse_pattern(text))
 
         def pattern_push(text: str) -> bool:
-            if len(text) > TEXT_MAX:                    # an old pattern saved by the retired editor, 24 steps long
+            if len(text) > TEXT_MAX:                    # an older, longer pattern (24 steps)
                 self._problems[e["pattern"]] = (
                     f"the saved pattern is {len(text)} characters, more than Home Assistant's {TEXT_MAX}; "
                     "type a shorter one in Home Assistant to replace it")

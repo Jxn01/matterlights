@@ -195,7 +195,7 @@ if __name__ == "__main__":
 
 
 class RenderForLedsTest(unittest.TestCase):
-    """🚨 The regression guard for a rig that looked switched off for a day.
+    """Regression guard: a rig mirroring the bulbs must not render black on a dim screen.
 
     A bulb takes ``rgb_color`` and ``brightness`` as two separate arguments and
     Home Assistant normalises the colour, so ``(24, 24, 23)`` at brightness 255
@@ -222,7 +222,7 @@ class RenderForLedsTest(unittest.TestCase):
         )
 
     def test_a_dim_neutral_sample_renders_at_full_brightness(self) -> None:
-        """The exact case that was reported: a dark terminal on this rig."""
+        """The exact case that was reported: a dark terminal."""
 
         self.assertEqual(self._render(self._sample((24, 24, 23))), RgbColor(255, 255, 244))
 
@@ -276,9 +276,9 @@ class SplitNearFarSamplesTest(unittest.TestCase):
 
 
 class HistogramEquivalenceTest(unittest.TestCase):
-    """🚨 Two implementations of the same histogram must not drift.
+    """Two implementations of the same histogram must not drift.
 
-    The numpy path is ~100x faster and is what runs on this rig; the Python loop
+    The numpy path is ~100x faster and is what runs where numpy is installed; the Python loop
     is what runs anywhere numpy is missing (Windows). If they disagree, the same
     screen produces different lights on different machines -- and the difference
     would show up as "the ambience feels off", not as a failure.

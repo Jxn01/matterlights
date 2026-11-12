@@ -12,7 +12,7 @@ the loopback on Windows, which has no unix datagram sockets at all. Both are
 connectionless -- there is no connection to lose and no reader to block on.
 ``RGB_PUBLISH_SOCKET`` picks one; see :mod:`matterlights.rgb_target`.
 
-⚠️ **This must never be able to break the sync loop.** The lights are the
+**This must never be able to break the sync loop.** The lights are the
 product; the extension is a bystander. Every failure mode -- no listener, a
 socket that was deleted, a full buffer, a path that is suddenly a directory, a
 platform with no unix sockets -- is swallowed and logged once.
@@ -64,8 +64,8 @@ class AmbiencePublisher:
         if self._udp:
             family = socket.AF_INET
         else:
-            # 🚨 getattr, never socket.AF_UNIX: Windows CPython has no such
-            # attribute, and the AttributeError used to escape the OSError
+            # getattr, never socket.AF_UNIX: Windows CPython has no such
+            # attribute, and the AttributeError would escape the OSError
             # handler below and take the sync loop down at its first publish.
             family = getattr(socket, "AF_UNIX", None)
             if family is None:
@@ -146,7 +146,7 @@ class AmbiencePublisher:
         try:
             sock.sendto(json.dumps(payload).encode("utf-8"), self._address)
         except ConnectionResetError:
-            # 🚨 Windows, UDP: an earlier send reached a closed port, the ICMP
+            # Windows, UDP: an earlier send reached a closed port, the ICMP
             # port-unreachable came back, and Winsock reports it HERE -- on the
             # next send, as WSAECONNRESET. Microsoft says the socket is no longer
             # usable after that, so it is replaced on the next tick.

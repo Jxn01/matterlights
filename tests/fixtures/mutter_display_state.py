@@ -1,4 +1,4 @@
-"""Real ``GetCurrentState`` output from GNOME 50 on jxn-garuda, 2026-09-08.
+"""Real ``GetCurrentState`` output from a GNOME 50 session.
 
 Three screens: a 4K landscape primary at scale 1.0 and two 4K portrait panels
 at scale 1.25 with 90-degree transforms. Recorded rather than invented, because

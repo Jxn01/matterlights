@@ -282,7 +282,7 @@ def _reset() -> ConnectionResetError:
 
 
 class WindowsConnectionResetTest(unittest.TestCase):
-    """🚨 Windows reports a UDP send to a closed port on the NEXT send.
+    """Windows reports a UDP send to a closed port on the NEXT send.
 
     The closed port answers with an ICMP port-unreachable, and Winsock hands that
     to the socket's following ``sendto`` as ``WSAECONNRESET`` --
@@ -377,12 +377,11 @@ class NeverRaisesTest(unittest.TestCase):
                     self.assertFalse(publisher.publish((1, 2, 3), (4, 5, 6), **FRAME))
 
     def test_no_unix_sockets_at_all_is_a_warning_not_a_crash(self) -> None:
-        """🚨 ``socket.AF_UNIX`` does not exist on Windows CPython.
+        """``socket.AF_UNIX`` does not exist on Windows CPython.
 
-        Looking it up raised ``AttributeError``, which the ``OSError`` handler
-        around it did not catch -- so a unix path in ``RGB_PUBLISH_SOCKET`` on
-        Windows took the whole sync loop down at its first publish. Latent only
-        because the extension defaults to off.
+        Looking it up raises ``AttributeError``, which an ``OSError`` handler
+        around it would not catch -- so a unix path in ``RGB_PUBLISH_SOCKET`` on
+        Windows must not take the sync loop down at its first publish.
         """
 
         logging.disable(logging.NOTSET)

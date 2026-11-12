@@ -1,9 +1,8 @@
 """Turn every configured light off, once, then exit.
 
-This exists because the in-process shutdown hook cannot be relied on. Measured
-over eight days covering six shutdowns and two restarts, its callback never ran
-once -- while the window it listens on was demonstrably alive and answering
-messages from another process.
+This exists because the in-process shutdown hook cannot be relied on: its
+callback never ran across several shutdowns and restarts, although the window it
+listens on was alive and answering messages from another process.
 
 A system-level trigger runs this module instead, as a fresh process started
 once the shutdown is already under way, so it does not depend on the sync loop
@@ -15,7 +14,7 @@ having survived:
   unit ordered after ``network-online.target`` so that, since systemd stops
   units in reverse order, it runs while the network is still up.
 
-⚠️ **It must run at SYSTEM level on both platforms, and for the same reason.**
+**It must run at SYSTEM level on both platforms, and for the same reason.**
 On Windows, registered as an ordinary interactive task, it triggers on time --
 one second after event 1074 -- and then dies with ``0xC000026B``
 (``STATUS_DLL_INIT_FAILED_LOGOFF``): "the application failed to initialize

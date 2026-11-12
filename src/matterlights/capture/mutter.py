@@ -5,19 +5,19 @@ cross-desktop route, and it is implemented here as ``portal.py``. But it raises 
 **consent dialog**, and a screen-sync daemon that autostarts with the session
 would meet that dialog at login with nobody looking at it. Mutter's own API --
 the one the portal itself calls through to -- has no dialog, needs no restore
-token to lose, and works headless from a systemd unit on first boot. Measured on
-this rig: 14 ms to first frame, no prompt, clean teardown.
+token to lose, and works headless from a systemd unit on first boot. In testing:
+14 ms to first frame, no prompt, clean teardown.
 
 The cost is that this is a private, GNOME-only interface with no stability
 promise (it is at version 4). ``portal.py`` is the hedge, and the selection rule
 in ``capture/__init__.py`` decides between them by asking whether this is GNOME
-at all -- never by catching an error from here. See R1 in the design doc.
+at all -- never by catching an error from here.
 
 GEOMETRY. Monitor sizes are reported in Mutter's LOGICAL coordinates -- mode size
 divided by scale, axes swapped for a rotated output. Those are stage coordinates,
 which is what ``RecordArea`` takes and what a picture of the desktop arrangement
 needs. They are deliberately NOT XWayland's numbers,
-which report this rig's 3840x2160 primary as 7680x4320.
+which report a 3840x2160 primary as 7680x4320.
 """
 
 from __future__ import annotations
@@ -52,10 +52,9 @@ class MutterUnavailable(RuntimeError):
 # Matched case-insensitively against the D-Bus error message.
 #
 # "Session creation inhibited" is what Mutter answers while the display is
-# asleep or the session is locked -- observed live on 2026-09-08 at 23:04:28,
-# 687 ms after Mutter closed the previous session because the monitor was
+# asleep or the session is locked -- seen 687 ms after Mutter closed the previous session because the monitor was
 # powering down and 7 ms before this program's own display-power watcher
-# noticed. Both sides were behaving correctly; only the reporting was wrong.
+# noticed. Both sides behave correctly; only reporting it as an error would be wrong.
 _TRANSIENT_DBUS_ERROR_MARKERS = ("inhibited",)
 
 
@@ -253,8 +252,8 @@ class MutterSource:
     def open_stream(self, capture_target: str) -> int:
         """Start recording ``capture_target`` and return its PipeWire node id.
 
-        ⚠️ **Always ``RecordArea``, never ``RecordMonitor`` -- including for a
-        single screen.** Measured on this rig 2026-09-08: ``RecordMonitor`` on
+        **Always ``RecordArea``, never ``RecordMonitor`` -- including for a
+        single screen.** ``RecordMonitor`` on
         DP-2 (a Dell 32" at 3840x2160@240 with ``refresh-rate-mode: variable``)
         delivered **no frames at all**, while ``RecordArea`` over that monitor's
         identical rectangle delivered one in under 0.1 s. The two 60 Hz outputs
@@ -433,10 +432,10 @@ def parse_monitors(state: tuple) -> list[Monitor]:
     plausible:
 
     * **Scale.** A logical monitor's size is its mode divided by its scale. This
-      rig's portrait panels run 3840x2160 at 1.25, so they are 3072x1728
+      portrait panels run 3840x2160 at 1.25, so they are 3072x1728
       logical -- not 3840x2160.
     * **Rotation.** Transforms 1/3/5/7 are the quarter turns and swap the axes,
-      so those panels end up 1728x3072. ``RecordArea`` was measured returning
+      so those panels end up 1728x3072. ``RecordArea`` returns
       2160x3840 for that rectangle, i.e. the logical box rendered at the
       monitor's own scale -- which is why zones stay physically meaningful.
     * **Order.** Sorted by position, so index 2 keeps meaning the same screen

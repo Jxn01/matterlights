@@ -1,4 +1,4 @@
-"""The lights hub, part two (2026-11-12): every setting the localhost pages held, mirrored to Home Assistant helpers."""
+"""The lights hub, part two: every setting mirrored to Home Assistant helpers."""
 from __future__ import annotations
 
 import logging
@@ -288,8 +288,8 @@ class Zones(Base):
         self.assertEqual(self.zones_now()[0].name, "mine")
 
     def test_a_refused_pick_is_forgotten_once_the_sides_agree_again(self):
-        """Live, 2026-11-12: 'custom' refused, then the hand-drawn file came back -- both sides said custom, and the
-        old 'cannot apply' stayed in setting_problems for good."""
+        """'custom' refused, then the hand-drawn file comes back -- both sides say custom, and the
+        old 'cannot apply' must not stay in setting_problems."""
 
         save_light_zones(self.zones, LIGHTS, [ScreenZone("mine", 0.1, 0.1, 0.4, 0.4), ScreenZone("top-right", 0.62, 0.0, 1.0, 0.35)])
         hand_drawn = self.zones.read_bytes()
@@ -424,7 +424,7 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 class OneRequestPerTick(Base):
-    """2026-11-12: a request per helper (13 a second) and a file parse per binding doubled the loop's idle CPU."""
+    """A request per helper (13 a second) and a file parse per binding would double the loop's idle CPU."""
 
     def test_one_batch_read_and_one_parse_per_tick(self):
         from unittest import mock

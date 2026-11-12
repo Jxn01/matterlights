@@ -50,7 +50,7 @@ class OffGuardTests(unittest.TestCase):
 class LateColourTests(unittest.TestCase):
     """The real worker and guard against bulbs that are slow enough for the race to happen every time.
 
-    The race was seen once on the real bulbs (2026-11-02) and could not be provoked there on demand, with
+    The race is hard to provoke on real bulbs, with
     or without the fix: a batch takes a fraction of a second, so the off has to land inside it. Here it always does.
     """
 
@@ -101,7 +101,7 @@ class LateColourTests(unittest.TestCase):
         self.assertEqual(set(self.run_it(guarded=True).values()), {"off"})
 
     def test_the_test_bites_without_the_guard(self):
-        """Positive control: this is the lamp left lit on 2026-11-02."""
+        """Positive control: this is the lamp left lit."""
         self.assertIn("on", self.run_it(guarded=False).values())
 
 
@@ -205,7 +205,7 @@ class SyncLoopHandlerOrderTest(unittest.TestCase):
 class RgbPublishDuringMasterOffTest(unittest.TestCase):
     """The RGB extension keeps receiving frames while the lamps are switched off.
 
-    The owner chose "the lamps' master switch does not silence the RGB". That is
+    The lamps' master switch does not silence the RGB. That is
     not free: the sync loop takes a master-off branch that never reaches the
     capture, so nothing would be published and the extension would go dark after
     its staleness timeout. This asserts the branch publishes, and that it only
@@ -282,8 +282,8 @@ class RgbPublishDuringMasterOffTest(unittest.TestCase):
 
 
 class EdgesTest(unittest.TestCase):
-    """The normal and the RGB-only path share one edge-triggered logger (they had drifted: the RGB-only path, used
-    while the lamps are switched off, went dark in silence -- the owner's exclusive-fullscreen blackout left no trace)."""
+    """The normal and the RGB-only path share one edge-triggered logger (the RGB-only path, used
+    while the lamps are switched off, must not go dark in silence)."""
 
     def test_dark_edges_log_once_each_way(self):
         from matterlights.main import _Edges
@@ -349,12 +349,11 @@ class EdgesTest(unittest.TestCase):
 
 
 class PublishRgbFrameTest(unittest.TestCase):
-    """🚨 What reaches the RGB extension must be what the BULBS EMIT.
+    """What reaches the RGB extension must be what the BULBS EMIT.
 
     Publishing the sampled colour instead is not visibly wrong on a bright
     screen and renders the whole rig black on a dark one, because the receiving
-    hardware has no brightness channel to apply separately. That shipped, and
-    the case looked switched off for a day while the lamps looked correct.
+    hardware has no brightness channel to apply separately.
     """
 
     def _samples(self, near_colour, far_colour, brightness=200, active_ratio=0.5):
@@ -430,7 +429,7 @@ class PublishRgbFrameTest(unittest.TestCase):
 class PalettePublishTest(unittest.TestCase):
     """The palette must reach the wire, and its absence must not break anything.
 
-    ⚠️ `ambience_frame` is bound before the mode branch on purpose. The publish
+    `ambience_frame` is bound before the mode branch on purpose. The publish
     call sits *outside* that branch, so assigning it only in the ambience arm
     leaves the name unbound for every other colour_sync_mode -- a NameError on
     the first frame, in a path the ambience tests never touch.
@@ -491,14 +490,14 @@ class PalettePublishTest(unittest.TestCase):
 
 
 class SleepPublishingTest(unittest.TestCase):
-    """🚨 A bulb failure must not turn the case off and on again.
+    """A bulb failure must not turn the case off and on again.
 
     The sync loop backs off for five seconds when Home Assistant refuses writes,
     which is right -- there is no point hammering it. But the RGB extension is a
     bystander watching the same screen, and it goes dark after three seconds of
     silence, correctly, because a frozen frame looks exactly like working sync.
-    So one flaky bulb produced a visible off/on cycle across the whole case,
-    every retry, with nothing in either log to say why.
+    So one flaky bulb would produce a visible off/on cycle across the whole case,
+    every retry.
     """
 
     class _Publisher:

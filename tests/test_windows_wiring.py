@@ -1,22 +1,16 @@
 """Execute the Windows wiring on Linux, under a deliberately thin Win32 fake.
 
-WHY THIS EXISTS. The Windows halves of this program cannot be run on the rig
-that hosts them: Linux, Windows and Home Assistant OS are three boot options on
-one machine and never run at the same time, so "boot Windows and try it" costs a
-reboot and ends the session doing the testing. Before this file, the only
-evidence the Windows side still worked after the Linux port was that it compiled.
-
-Compiling is a weak claim. The port MOVED these modules -- capture came out of
+WHY THIS EXISTS. The Windows halves of this program cannot be run on a Linux
+machine, so "boot Windows and try it" is not an option for every change; and
+compiling is a weak claim. The Linux port MOVED these modules -- capture came out of
 ``screen.py`` into ``capture/`` -- and the risk that creates is at the SEAMS: does
 the factory still hand back the Windows class, does nothing Linux-only leak in.
-(Service control and the localhost dashboard that used it were retired on
-2026-11-12, when every setting moved into Home Assistant.)
 
 Those seams are all plain Python. They do not need Windows; they need
 ``sys.platform`` to say ``win32`` and two ctypes attributes to exist. So they are
 tested here, on Linux, on every run.
 
-⚠️ **What this deliberately does NOT test.** The fake answers every Win32 call
+**What this deliberately does NOT test.** The fake answers every Win32 call
 with "1, fine". It cannot tell you that ``CreateWindowExW`` really produces a
 window, or that DXGI really produces a frame. That still requires Windows. What it tells you is that the
 plumbing this port rearranged is connected -- which is exactly the part that
@@ -24,7 +18,7 @@ moved, and exactly the part a compile check cannot see.
 
 The fake is kept thin on purpose. Growing it until the Win32 message loops run
 would turn it into a simulator that mostly tests itself; the message-loop code is
-verbatim from the pre-port commits and is guarded by the Windows-only tests that
+unchanged from before the port and is guarded by the Windows-only tests that
 run when the suite is executed on Windows.
 """
 
@@ -111,7 +105,7 @@ def win32_environment():
 
 @unittest.skipIf(sys.platform == "win32", "on Windows the real tests run instead")
 class WindowsModulesImportTest(unittest.TestCase):
-    """Every Windows module must import. Four of them broke during the port (one, service control, retired since)."""
+    """Every Windows module must import. A broken import in any of them is invisible from Linux."""
 
     def test_all_windows_modules_import(self) -> None:
         with win32_environment():
@@ -124,10 +118,10 @@ class WindowsModulesImportTest(unittest.TestCase):
                     self.assertIsNotNone(importlib.import_module(name))
 
     def test_module_surgery_left_no_undefined_names(self) -> None:
-        """Rebuilding these modules once stripped their constant blocks.
+        """Rebuilding these modules must not strip their constant blocks.
 
         Importing proves the module body executes; this additionally touches the
-        module-level constants that the earlier surgery deleted, which import
+        module-level constants a rebuild could delete, which import
         alone would not notice because they are only read inside functions.
         """
 
@@ -193,7 +187,7 @@ class FactoryDispatchTest(unittest.TestCase):
 
 @unittest.skipIf(sys.platform == "win32", "on Windows the real tests run instead")
 class ShutdownHelperImportSurfaceTest(unittest.TestCase):
-    """R2 holds on Windows too, not just on Linux.
+    """The shutdown helper's import rule holds on Windows too, not just on Linux.
 
     ``lights_off`` runs as a fresh process while the machine is already shutting
     down. Anything it imports is import time it does not have, and the capture
@@ -234,8 +228,7 @@ class ShutdownHelperImportSurfaceTest(unittest.TestCase):
     def test_the_guard_can_actually_fail(self) -> None:
         """Prove the check above is capable of catching the thing it guards.
 
-        R2 was violated once already and found by running this check, not by
-        reading the code. A guard that cannot fail is decoration, so this
+        A guard that cannot fail is decoration, so this
         deliberately imports the capture stack and asserts the same measurement
         turns red.
         """

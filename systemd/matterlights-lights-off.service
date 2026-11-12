@@ -1,10 +1,9 @@
 # Turn the lights off when the machine shuts down or reboots (SYSTEM unit).
 #
-# WHY A SYSTEM UNIT AND NOT A USER ONE. This is the same lesson the Windows side
-# paid for. There, an ordinary interactive scheduled task triggered correctly on
-# shutdown and then died with 0xC000026B, STATUS_DLL_INIT_FAILED_LOGOFF: the
+# WHY A SYSTEM UNIT AND NOT A USER ONE. The Windows side has the same constraint: an ordinary
+# interactive scheduled task triggers on shutdown and then dies with 0xC000026B, STATUS_DLL_INIT_FAILED_LOGOFF: the
 # session was already being destroyed, so no process could start in it. Only a
-# task running as SYSTEM, in session 0, actually fired.
+# task running as SYSTEM, in session 0, fires.
 #
 # The Linux mirror is exact: a USER unit dies with the session, so it cannot be
 # the thing that reports the session dying. This runs in the system manager,
@@ -42,7 +41,7 @@ Environment=MATTERLIGHTS_ENV_FILE=@INSTALL_DIR@/.env
 # StandardOutput=journal below already captures the same lines.
 Environment=LOG_PATH=none
 
-# Where the sync loop leaves its mark. A shutdown with no mark leaves the room alone: Garuda is also powered on and off with nobody at
+# Where the sync loop leaves its mark. A shutdown with no mark leaves the room alone: the machine can be powered on and off with nobody at
 # it. It lives here and not in /run/user/1000, which is torn down with the session before this unit stops. The sync loop runs as the
 # user, hence 1777. Anyone local touching it can only make the lights go off at shutdown.
 RuntimeDirectory=matterlights

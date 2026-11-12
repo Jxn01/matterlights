@@ -21,8 +21,7 @@ instances poll, so without that the new owner could act first and have its "off"
 overtaken by the last colour of the old one, a lamp left lit with nobody to
 notice (see ``light_worker``).
 
-**Manual control** (``HA_MANUAL_ENTITY``, an on/off helper; the lights hub,
-2026-11-12): while it is on, NO instance owns the bulbs -- whatever the selector
+**Manual control** (``HA_MANUAL_ENTITY``, an on/off helper): while it is on, NO instance owns the bulbs -- whatever the selector
 says -- so a colour set in Home Assistant stays. Every instance honours it
 (``tv-hub``'s deploy copies the setting to the TV's), and Home Assistant's
 stale-heartbeat automation is conditioned on it being off. A separate helper,

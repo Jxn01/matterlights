@@ -1,9 +1,8 @@
 """Screen capture, and the only place in the package that knows which OS it is on.
 
-``screen.py`` used to do both jobs -- grabbing frames and turning them into
-colours. Those are not the same concern: the colour engine is arithmetic over a
+Grabbing frames and turning them into colours are separate concerns: the colour engine is arithmetic over a
 byte buffer and runs anywhere, while grabbing a frame is the single most
-platform-bound thing the project does. Keeping them in one module is what made
+platform-bound thing the project does. Keeping them in one module would make
 ``from ctypes import windll`` a package-wide outage on Linux.
 
 So the split is: a backend hands over **raw BGRx bytes plus dimensions**, and
@@ -35,7 +34,7 @@ class CaptureUnavailable(RuntimeError):
     screencast session while the display is asleep or the session is locked --
     exactly the moments when nobody is looking at the screen anyway.
 
-    ⚠️ **Deliberately NOT a subclass of ``MutterUnavailable``.** That one means
+    **Deliberately NOT a subclass of ``MutterUnavailable``.** That one means
     "this capture target is no good, try the fallback screen", and
     ``LinuxCaptureBackend._ensure_stream`` catches it to do precisely that.
     Falling back to a different monitor cannot help here: the whole ScreenCast
@@ -43,7 +42,7 @@ class CaptureUnavailable(RuntimeError):
     would just produce a second failure with a more confusing message.
 
     Callers should treat it as "skip this tick", on the normal sync interval --
-    not the error backoff. It was found because the real window is ~700 ms: the
+    not the error backoff. The real window is ~700 ms: the
     gap between Mutter closing the session as the monitor powers down and our
     own display-power watcher noticing. Backing off five seconds there turns a
     sub-second non-event into a visible stall.

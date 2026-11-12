@@ -5,12 +5,11 @@ is the machine state the program generates: the log, and the portal restore
 token. Those belong in the platform's state directory, and the two platforms
 disagree about where that is.
 
-The previous fallback for "not Windows" was the current working directory, which
-meant a log file appearing in whatever directory the process happened to start
-in -- usually the repo, where it is gitignored and therefore invisible until it
-is large.
+A fallback to the current working directory would put a log file in whatever
+directory the process happened to start in -- usually the repo, where it is
+gitignored and therefore invisible until it is large.
 
-⚠️ **NOTHING HERE MAY RAISE.** ``load_settings()`` computes the default log path
+**Nothing here may raise.** ``load_settings()`` computes the default log path
 as an *argument expression*, so Python evaluates it on every call even when
 ``LOG_PATH`` is set explicitly. An exception raised here is therefore not a
 misplaced log file -- it is a startup crash for every entry point, including
@@ -30,7 +29,7 @@ _APP_DIR_NAME = "matterlights"
 def _home_or_none() -> Path | None:
     """``Path.home()`` that reports failure instead of raising.
 
-    ⚠️ **ASYMMETRIC BY PLATFORM, WHICH IS WHY THIS IS EASY TO MISS FROM LINUX.**
+    **Asymmetric by platform, which makes it easy to miss from Linux.**
     ``Path.home()`` is ``Path("~").expanduser()``. On POSIX that falls back to
     the passwd database when ``HOME`` is unset, so it effectively cannot fail.
     On Windows it is purely environmental -- ``USERPROFILE``, or

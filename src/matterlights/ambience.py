@@ -226,8 +226,8 @@ def render_for_leds(
 ) -> RgbColor:
     """What a bulb fed this sample actually emits, as a single RGB triple.
 
-    🚨 **A sample's colour is not what the bulb shows, and the difference is the
-    whole ball game for an LED.** Home Assistant takes ``rgb_color`` and
+    **A sample's colour is not what the bulb shows, and the difference matters
+    for an LED.** Home Assistant takes ``rgb_color`` and
     ``brightness`` as separate arguments and normalises the colour, so a bulb
     given ``(24, 24, 23)`` at brightness 255 emits a bright warm white -- not a
     9%-grey glow. An addressable LED has no brightness channel: its brightness
@@ -262,8 +262,8 @@ def _sample_frame_cached(raw: bytes, width: int, height: int, sample_stride: int
 
     Both capture backends are damage-driven: while nothing on screen changes they
     return the *same* ``bytes`` object on every tick (``CaptureBackend.grab``),
-    and the loop used to histogram it twenty times a second regardless -- about
-    15 % of a core at 4K for a still desktop (measured 2026-11-12).
+    so histogramming it on every tick would cost about 15 % of a core at 4K for a
+    still desktop.
 
     Identity, not equality, is the key, and only for ``bytes``: an immutable
     object that is the same object holds the same pixels, so this is exact and
@@ -293,11 +293,10 @@ def _sample_frame_cached(raw: bytes, width: int, height: int, sample_stride: int
 def sample_frame(raw: bytes, width: int, height: int, sample_stride: int) -> AmbienceFrame:
     """Distill one frame into a weighted palette plus global brightness stats.
 
-    ⚠️ **This is the whole cost of the sync loop.** Everything else -- Home
+    **This is the whole cost of the sync loop.** Everything else -- Home
     Assistant, the RGB socket, the colour maths -- is noise beside walking the
     pixels. At 3840x2160 with ``SAMPLE_STRIDE=121`` that is ~68,400 pixels a
-    frame, and in pure Python it was ~45% of a core at 20 Hz, which is what
-    capped the achievable sync rate. The GPU is not involved at any point: the
+    frame, ~45% of a core at 20 Hz in pure Python, which would cap the sync rate. The GPU is not involved at any point: the
     compositor has already produced the buffer and this only reads bytes.
 
     So there are two implementations of the histogram, and they must agree
@@ -338,13 +337,13 @@ def _histogram_numpy(raw: bytes, width: int, height: int, sample_step: int):
     active = np.maximum(np.maximum(red, green), blue) >= _ACTIVE_CHANNEL_THRESHOLD
     keys = ((red >> _BIN_SHIFT) << 6) | ((green >> _BIN_SHIFT) << 3) | (blue >> _BIN_SHIFT)
 
-    # 🚨 Lanes: a real screen is mostly one dark colour, so nearly every sample
+    # Lanes: a real screen is mostly one dark colour, so nearly every sample
     # lands in ONE bin, and bincount's `out[key] += w` then waits on the previous
     # add to that same slot, sample after sample. Spreading each bin over
     # _HISTOGRAM_LANES slots by sample position breaks that chain; the lanes are
     # summed back afterwards. Integer-valued float64 sums are exact far below
     # 2**53, so the result is unchanged. 4.6 -> 2.4 ms on a real 4K frame at
-    # step 5, no difference on noise (measured 2026-11-12).
+    # step 5, no difference on noise.
     size = 1 << 9
     laned = (keys << _HISTOGRAM_LANE_BITS) | _lane_index(np, red.size)
     laned_size = size << _HISTOGRAM_LANE_BITS

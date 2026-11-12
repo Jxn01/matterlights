@@ -38,7 +38,7 @@ class Settings:
     ha_switch_poll_seconds: float = 1.0
     ha_owner_entity: str = ""
     ha_owner_value: str = ""
-    # The lights hub (2026-11-12, matterlights.ha_selects): manual control from Home
+    # The lights hub (matterlights.ha_selects): manual control from Home
     # Assistant, the mode and screen selects, and a status sensor. Empty = off.
     ha_manual_entity: str = ""
     ha_mode_entity: str = ""
@@ -66,10 +66,10 @@ class Settings:
     light_update_interval_seconds: float = 0.0
     """Minimum gap between Home Assistant writes, independent of the sync rate.
 
-    🚨 **The sync rate and the bulb write rate used to be the same knob.** Taking
-    the loop to 20 Hz for the RGB extension's benefit also asked six Matter bulbs
-    for twenty updates a second, which they cannot take -- Home Assistant started
-    returning ReadTimeout in volume. The bulbs and an LED strip want completely
+    **The sync rate and the bulb write rate are separate.** Running the loop at
+    20 Hz for the RGB extension's benefit would also ask six Matter bulbs for
+    twenty updates a second, which they cannot take (Home Assistant returns
+    ReadTimeout). The bulbs and an LED strip want completely
     different rates: one is a mains lamp over the network, the other is a USB
     device on the desk.
 
@@ -90,8 +90,8 @@ class Settings:
 def platform_name(platform: str | None = None) -> str:
     """``linux`` or ``windows`` -- the suffix of this OS's own config and state files.
 
-    One checkout can serve both halves of a dual boot (the author's is a single
-    tree on an NTFS drive both OSes mount), so everything that differs per OS
+    One checkout can serve both halves of a dual boot (for example one tree on an NTFS drive
+    both OSes mount), so everything that differs per OS
     is kept in files named for the OS rather than in one shared file.
     """
 
@@ -245,7 +245,7 @@ def _default_state_file_path(kind: str, base_dir: Path | None, platform: str | N
     state, so none of them may be shared between two OSes using one checkout:
     a Windows zone layout is meaningless on Linux, and the other way round.
 
-    A file with the pre-2026-09-26 name (``.matterlights-<kind>.json``) is still
+    A file with the old single-OS name (``.matterlights-<kind>.json``) is still
     used when this OS has no file of its own yet, so an existing single-OS
     install keeps its zones. Before sharing a checkout between two OSes, rename
     it to the owning OS's name.

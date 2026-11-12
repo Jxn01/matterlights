@@ -1,8 +1,7 @@
-"""The lights hub (2026-11-12): the mode and the screen as Home Assistant selects, and a status sensor.
+"""The lights hub: the mode and the screen as Home Assistant selects, and a status sensor.
 
-Together with the two master switches (``ha_switches``) and manual control (``owner``), this is what lets one Home
-Assistant dashboard (``lights.jxn.hu``) hold every setting the localhost pages used to (the rest is ``ha_hub``): the
-owner asked for every light setting in one place, and the localhost pages are gone.
+Together with the two master switches (``ha_switches``) and manual control (``owner``), this lets one Home
+Assistant dashboard hold every setting (the rest is ``ha_hub``).
 
 * **Mode** (``HA_MODE_ENTITY``, an ``input_select`` with exactly the options in ``MODE_OPTIONS``): follow the screen,
   or play the colour / pattern saved in the control file. Mirrored both ways like a switch: the helper is shared by

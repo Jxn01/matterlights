@@ -1,8 +1,7 @@
 """Mirror the two master switches to Home Assistant, both ways.
 
 The **Lights** and **RGB** master switches are ``lights_on`` / ``rgb_on`` in the
-control-state file (the localhost dashboard that used to flip them was retired on
-2026-11-12; Home Assistant is now where they are flipped). With ``HA_LIGHTS_SWITCH_ENTITY`` and/or
+control-state file. With ``HA_LIGHTS_SWITCH_ENTITY`` and/or
 ``HA_RGB_SWITCH_ENTITY`` set, this mirror keeps each one equal to an on/off
 entity in Home Assistant (an ``input_boolean`` helper), so the same switch can
 be flipped from either place.

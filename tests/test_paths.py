@@ -48,7 +48,7 @@ class StateDirTest(unittest.TestCase):
 class HomeUndeterminableTest(unittest.TestCase):
     """Resolving the home directory must degrade, never raise.
 
-    ⚠️ THIS ASYMMETRY IS WHY THE BUG WAS INVISIBLE ON LINUX. ``Path.home()`` is
+    This asymmetry makes the failure invisible on Linux. ``Path.home()`` is
     ``Path("~").expanduser()``. On POSIX that falls back to the passwd database
     when HOME is unset, so it cannot fail. On Windows it is purely
     environmental -- USERPROFILE, or HOMEDRIVE+HOMEPATH -- and with none of them

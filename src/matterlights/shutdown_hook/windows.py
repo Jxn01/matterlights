@@ -1,8 +1,7 @@
 """Windows session-end detection via a hidden top-level window.
 
-⚠️ **This hook does not fire on an ordinary Windows shutdown or restart, and
-nothing here can make it.** Measured across eight days and eight session ends,
-the callback fired zero times -- while its window was demonstrably alive and
+**This hook does not fire on an ordinary Windows shutdown or restart, and
+nothing here can make it.** Across eight session ends, the callback never fired -- while its window was demonstrably alive and
 answering ``WM_QUERYENDSESSION`` sent from another process in 5 ms. The
 interactive session is torn down abruptly rather than being given the usual
 "please close" conversation. The scheduled task registered by
@@ -157,7 +156,7 @@ class Win32ShutdownHook:
         answer immediately. Windows *waits* for the ``WM_QUERYENDSESSION``
         reply, and an app that does not answer within ``HungAppTimeout``
         (~5s) gets the "this app is preventing you from restarting" screen.
-        Turning six Matter bulbs off has been measured taking over 3s when
+        Turning six Matter bulbs off can take over 3s when
         the bridge is busy -- which is precisely the state the sync loop
         leaves it in at shutdown -- so doing it inline would risk exactly
         that. Returning at once and letting the request finish in the

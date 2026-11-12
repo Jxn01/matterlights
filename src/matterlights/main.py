@@ -73,8 +73,7 @@ def run() -> None:
 
 
 class _RecentProblems(logging.Handler):
-    """The last few warnings and errors, for the status sensor's ``recent_problems`` (what the retired localhost
-    dashboard's log tail showed, now in Home Assistant)."""
+    """The last few warnings and errors, for the status sensor's ``recent_problems`` (a log tail in Home Assistant)."""
 
     def __init__(self, keep: int = 8) -> None:
         super().__init__(level=logging.WARNING)
@@ -147,12 +146,10 @@ def enforce_lights_off(
 ) -> None:
     """Turn off every available light that is not already confirmed off.
 
-    Call this on every tick an off-state holds, not just when it begins. The
-    original code turned the lights off once on entry and then latched a flag,
-    which silently did nothing whenever the bulbs happened to be unavailable at
-    that instant: the log said "turning lights off", no request was sent, and
-    the latch guaranteed it was never retried. Both logged display-sleep events
-    hit exactly that case.
+    Call this on every tick an off-state holds, not just when it begins. Turning
+    the lights off once on entry and latching a flag would silently do nothing
+    whenever the bulbs happened to be unavailable at that instant: no request is
+    sent, and the latch guarantees it is never retried.
 
     Tracking which lights are *confirmed* off instead makes the state
     self-healing -- a bulb that was unavailable when the screen went to sleep,
@@ -178,8 +175,7 @@ class OffGuard:
 
     The worker sends a batch one bulb at a time, so a colour can land after the
     off-state has switched that bulb off and confirmed it. Nothing looks at a
-    confirmed bulb again, so it stayed lit until the next change of state: on
-    2026-11-02, one lamp with the master switch off. Entering an off-state now
+    confirmed bulb again, so it would stay lit until the next change of state. Entering an off-state now
     abandons the batch, and if a write may still land, sweeps once more after it has.
     """
 
@@ -220,7 +216,7 @@ def main() -> int:
         return 0
     if settings.turn_off_on_shutdown:
         # Only the shutdown layer reads the mark; an instance that never darkens the room at shutdown (the TV's) has no
-        # use for it, and its host has no /run/matterlights -- that was a warning at every start.
+        # use for it, and its host has no /run/matterlights.
         leave_mark()
 
     client = HomeAssistantClient(
@@ -306,7 +302,7 @@ def main() -> int:
     select_watch = start_select_mirror(settings, client, LOGGER)
     select_mirror = select_watch[0] if select_watch is not None else None
     next_monitor_offer = 0.0
-    # Every other setting the localhost pages held (ha_hub): saved colour, pattern, engine, zones, restart.
+    # Every other setting (ha_hub): saved colour, pattern, engine, zones, restart.
     restart_requested = threading.Event()
     hub_watch = start_hub_mirror(settings, client, restart_requested.set, LOGGER)
     hub_mirror = hub_watch[0] if hub_watch is not None else None
@@ -390,10 +386,10 @@ def main() -> int:
                     if standing_aside and owned:
                         standing_aside = False
                         reset_runtime_caches()
-                        # Whoever had the lamps meanwhile -- the TV's instance, or the owner in manual control -- may
+                        # Whoever had the lamps meanwhile -- the TV's instance, or manual control -- may
                         # have switched them on, so nothing confirmed off before still holds. Forget it and leave the
-                        # off-states, so whichever applies is entered afresh and sweeps every lamp (found 2026-11-12:
-                        # a lamp lit in manual control stayed lit after manual control ended with the lamps switched off).
+                        # off-states, so whichever applies is entered afresh and sweeps every lamp (a lamp lit in
+                        # manual control would otherwise stay lit after it ended with the lamps switched off).
                         master_off_active = False
                         display_off_active = False
                         master_off_confirmed.clear()
@@ -617,12 +613,12 @@ def main() -> int:
                                 frame=ambience_frame,
                             )
 
-                        # 🚨 The bulbs get their own rate, separate from the loop.
+                        # The bulbs get their own rate, separate from the loop.
                         #
                         # The loop's rate exists to serve the screen capture and
                         # the RGB extension. Six Matter bulbs over the network
-                        # want something far slower: driving them at 20 Hz simply
-                        # produced ReadTimeouts. Skipping the bulb work does not
+                        # want something far slower: driving them at 20 Hz
+                        # produces ReadTimeouts. Skipping the bulb work does not
                         # skip the RGB publish above -- that is the whole point
                         # of doing it here rather than earlier.
                         now = time.monotonic()
@@ -664,13 +660,12 @@ def main() -> int:
                             settings.brightness_floor,
                         )
 
-                        # 🚨 Handed to a worker, never awaited here.
+                        # Handed to a worker, never awaited here.
                         #
                         # This is a network call with a multi-second timeout. Made
-                        # inline, one unreachable bulb froze capture, sampling and
-                        # the RGB publish for its full duration -- and the
-                        # extension then went dark on its staleness rule, so a
-                        # single flaky bulb blanked the whole case.
+                        # inline, one unreachable bulb would freeze capture, sampling and
+                        # the RGB publish for its full duration, and the
+                        # extension would go dark on its staleness rule.
                         if desired_states and not light_worker.busy:
                             light_worker.submit(desired_states, settings.transition_seconds)
 
@@ -725,14 +720,14 @@ def main() -> int:
                         "Sync iteration failed. Retrying in %.1f seconds.",
                         settings.error_retry_seconds,
                     )
-                    # 🚨 Keep the RGB extension fed while we back off.
+                    # Keep the RGB extension fed while we back off.
                     #
                     # This retry exists to stop hammering a Home Assistant that
                     # is refusing writes -- a bulb problem. But the extension is
                     # a bystander: it watches the same screen, and the screen has
-                    # not gone anywhere. Sleeping here silently meant no frames
+                    # not gone anywhere. Sleeping here would mean no frames
                     # for five seconds, and the extension goes dark after three,
-                    # so a single flaky bulb turned the whole case off and on
+                    # so a single flaky bulb would turn the whole case off and on
                     # again on a loop.
                     _sleep_publishing(
                         rgb_publisher,
@@ -779,9 +774,9 @@ def main() -> int:
 class _Edges:
     """Edge-triggered log lines, shared by the normal path and the RGB-only path.
 
-    The two paths had drifted: the normal one logged "Watched screen went dark", the RGB-only one (the lamps switched
-    off, the case and the soundbar still following the screen) decided dark in silence and swallowed capture failures
-    at DEBUG. So the owner's exclusive-fullscreen blackout (2026-10-25, lamps off) left no trace in the log at all.
+    The two paths must agree: the normal one logs "Watched screen went dark", the RGB-only one (the lamps switched
+    off, the case and the soundbar still following the screen) would otherwise decide dark in silence and swallow capture failures
+    at DEBUG, leaving no trace in the log.
     One state, one wording, for both: a line when the screen goes dark or comes back, a WARNING at the first failed
     capture of a streak and a line when it recovers -- never one per tick.
     """
@@ -804,7 +799,7 @@ class _Edges:
             self.capture_failing = True
             if isinstance(error, _capture.CaptureUnavailable):
                 # Not a failure -- the same state the normal path logs at INFO: Mutter refuses sessions while the display
-                # sleeps (KB 16-graphics, "Session creation inhibited"). As a WARNING it landed in the status sensor's
+                # sleeps ("Session creation inhibited"). As a WARNING it would land in the status sensor's
                 # recent_problems every time the screen blanked.
                 LOGGER.info("RGB-only capture inhibited (%s); waiting for the display", error)
                 return
@@ -895,7 +890,7 @@ def _publish_rgb_frame(
     it to obey the same verdicts instead of recomputing darkness from a palette
     and drifting.
 
-    ⚠️ ``near``/``far`` are the colours the bulbs **emit**, not the colours
+    ``near``/``far`` are the colours the bulbs **emit**, not the colours
     sampled off the screen -- :func:`render_for_leds` folds brightness into the
     triple, because the receiving hardware has no brightness channel of its own.
     Publishing the sampled colour instead is the bug this signature exists to

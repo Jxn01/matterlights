@@ -1,13 +1,10 @@
 """Nothing secret-shaped may be tracked by git.
 
-🚨 **A `.gitignore` entry of `.env` does not cover `.env.bak-040827`.**
+A `.gitignore` entry of `.env` does not cover `.env.bak-040827`.
 
-On 2026-09-10 a timestamped backup of the live `.env` -- carrying a working
-183-character Home Assistant long-lived access token -- was committed and pushed
-to this repository while it was public. The ignore rule said `.env`, which is an
-exact filename match, so every derivative walked straight past it: `.env.bak-*`,
-`.env.local`, `.env.prod`. The rule is now `.env.*` with a `!.env.example`
-negation, and this test is the thing that fails if it ever narrows again.
+The entry `.env` is an exact filename match, so every derivative walks straight
+past it: `.env.bak-*`, `.env.local`, `.env.prod`. The rule is `.env.*` with a
+`!.env.example` negation, and this test fails if it ever narrows.
 
 It checks the two independent ways a secret gets in: by **filename** (a file that
 is obviously a credential store) and by **content** (a token-shaped string in a
@@ -15,8 +12,7 @@ file nobody thought of as a credential store).
 
 **It is a `unittest.TestCase`, not bare pytest functions,** because the
 documented command is `python -m unittest discover -s tests` and that command
-does not see pytest functions at all. As first written, this file ran zero tests
-under it and the suite still said OK: a guard the documented command skips
+does not see pytest functions at all. A guard the documented command skips
 guards nothing. pytest collects a `TestCase` just the same.
 
 **On the patterns being built by concatenation:** a literal JWT prefix written

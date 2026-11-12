@@ -23,7 +23,7 @@ ask()  { local reply; read -r -p "$1 [y/N] " reply; [[ "$reply" =~ ^[Yy]$ ]]; }
 # --------------------------------------------------------------------------
 # 1. Find an interpreter that can actually see the system GObject bindings.
 #
-# THIS IS THE STEP THAT WASTES THE MOST TIME IF IT GOES WRONG. PyGObject and the
+# This step is easy to get wrong. PyGObject and the
 # GStreamer PipeWire plugin are distribution packages, not pip packages --
 # `pip install PyGObject` needs meson plus cairo/glib headers and usually fails.
 # The venv therefore has to be built with --system-site-packages, AND from the
@@ -110,7 +110,7 @@ install_unit() {   # $1 = source unit, $2 = destination dir, $3 = sudo or empty
 
 if ask "Install the user unit (the sync loop, started with your desktop session)?"; then
     install_unit matterlights-sync.service "$USER_UNIT_DIR"
-    # The localhost dashboard was retired (every setting lives in Home Assistant); remove an older install's unit.
+    # Every setting lives in Home Assistant; remove an older install's dashboard unit.
     if [ -e "$USER_UNIT_DIR/matterlights-dashboard.service" ]; then
         systemctl --user disable --now matterlights-dashboard.service 2>/dev/null || true
         rm -f "$USER_UNIT_DIR/matterlights-dashboard.service"
