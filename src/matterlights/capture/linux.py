@@ -86,16 +86,20 @@ def select_source(logger: logging.Logger | None = None):
 
 
 def caps_framerate(sync_interval_seconds: float) -> int:
-    """Frames per second to allow: twice the sampling rate, at least 1.
+    """Frames per second to allow: the sampling rate itself, at least 1.
 
-    Twice, so a frame is always fresher than the tick that reads it, without
-    letting the stream run at vsync for a consumer that samples five times a
-    second.
+    It was twice the sampling rate until 2026-11-12, so a frame was always
+    fresher than the tick that read it. But every frame Mutter hands over costs
+    gnome-shell a copy of the whole monitor -- while gaming, gnome-shell fell
+    from 48 % to 33 % of a core with this stream stopped, at 40 fps -- and the
+    lights cannot show the difference: the bulbs update at 5 Hz, and the frame a
+    tick reads is now at most one tick (50 ms at 20 Hz) old. The owner chose
+    the cheaper stream.
     """
 
     if sync_interval_seconds <= 0:
         return 1
-    return max(1, math.ceil(2.0 / sync_interval_seconds))
+    return max(1, math.ceil(1.0 / sync_interval_seconds - 1e-9))
 
 
 def build_pipeline_description(node_id: int, sync_interval_seconds: float) -> str:

@@ -766,9 +766,13 @@ the old behaviour. Skipping a bulb update does **not** skip the RGB publish.
 Settled here: 20 Hz loop, `SAMPLE_STRIDE=25`, `LIGHT_UPDATE_INTERVAL_SECONDS=0.2`
 — **30.0% of one core, zero bulb timeouts**, and 4.8× finer colour sampling than
 the 5 Hz configuration it replaced. The capture stream is not a separate limit —
-`caps_framerate()` asks for **twice** the sync rate, so 20 Hz already requests 40
-fps of 4K from Mutter. The cost is dominated by sampling, so lowering
-`SAMPLE_STRIDE` for finer colour multiplies it again.
+`caps_framerate()` asks Mutter for **the sync rate itself** (20 fps of 4K at 20 Hz;
+twice the rate until 2026-11-12). Each frame costs gnome-shell a copy of the whole
+monitor: while gaming, gnome-shell fell from 48 % to 33 % of a core with this
+stream stopped, back when it ran at 40 fps. At 1× a tick reads a frame at most one
+tick old, which the 5 Hz bulbs and the smoothed RGB cannot show. The process's own
+cost is dominated by sampling, so lowering `SAMPLE_STRIDE` for finer colour
+multiplies it again.
 
 ### 🚨 Home Assistant writes never run on the capture loop
 

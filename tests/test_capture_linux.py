@@ -77,18 +77,21 @@ class MonitorGeometryTest(unittest.TestCase):
 class CapsFramerateTest(unittest.TestCase):
     """R3: the cap is derived from the sync interval, never hard-coded."""
 
-    def test_twice_the_sampling_rate(self) -> None:
-        self.assertEqual(10, caps_framerate(0.2))
-        self.assertEqual(4, caps_framerate(0.5))
-        self.assertEqual(2, caps_framerate(1.0))
+    def test_the_sampling_rate_itself(self) -> None:
+        self.assertEqual(20, caps_framerate(0.05))
+        self.assertEqual(10, caps_framerate(0.1))
+        self.assertEqual(5, caps_framerate(0.2))
+        self.assertEqual(2, caps_framerate(0.5))
+        self.assertEqual(1, caps_framerate(1.0))
+        self.assertEqual(4, caps_framerate(0.3))  # never below the rate: rounds up
 
     def test_never_below_one(self) -> None:
         self.assertEqual(1, caps_framerate(10.0))
         self.assertEqual(1, caps_framerate(0.0))
 
     def test_the_cap_reaches_the_pipeline(self) -> None:
-        self.assertIn("max-framerate=10/1", build_pipeline_description(7, 0.2))
-        self.assertIn("max-framerate=4/1", build_pipeline_description(7, 0.5))
+        self.assertIn("max-framerate=5/1", build_pipeline_description(7, 0.2))
+        self.assertIn("max-framerate=2/1", build_pipeline_description(7, 0.5))
 
     def test_pipeline_requests_bgrx_and_a_non_blocking_sink(self) -> None:
         description = build_pipeline_description(42, 0.2)
