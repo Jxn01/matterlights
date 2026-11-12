@@ -8,395 +8,98 @@
 [![Home%20Assistant](https://img.shields.io/badge/Home%20Assistant-supported-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827?style=for-the-badge)](LICENSE)
 
-MatterLights is a desktop agent for **Windows and Linux** that samples your screen, computes a vivid representative color, and pushes that color to Home Assistant lights in near real time. Every setting lives in Home Assistant — the switches, the mode, the saved colour and pattern, the colour engine, the zones, the capture screen, a restart button and a live status — so there is nothing to open on the PC itself. It ships autostart integration for both platforms and enough guardrails to run unattended on a gaming or media PC.
+MatterLights samples your screen and sends a matching colour to Home Assistant lights in near real time — ambient
+lighting for a gaming or media PC, on **Windows and Linux (GNOME Wayland)**. It talks to the `light.*` entities you
+already have (Matter bulbs, in my case), so there is no extra lighting server or streaming stack.
 
-## Why this exists
+## Features
 
-This project targets a very specific setup:
+- **Ambience engine** — renders the screen's overall light as a small weighted palette spread across the bulbs beside
+  the screen and the ones deeper in the room, instead of painting the whole room the strongest colour on screen. The
+  older zoned and shared-variant engines are still there.
+- **Saved colour or pattern** — play a static colour, a tunable white or a looping multi-colour pattern instead of
+  following the screen.
+- **Everything controlled from Home Assistant** — the master switches, the mode, the capture screen, the saved
+  colour and pattern, the engine, the zones, a restart button and a live status sensor.
+- **Gets out of the way** — lights off when the screen goes dark, when the monitor sleeps and at shutdown; a heartbeat
+  lets Home Assistant turn them off if the PC crashes or loses power.
+- **Two sources, one set of bulbs** — a second instance can drive the same lights from another source (an LG TV), and
+  a selector in Home Assistant decides which one owns them. A manual-control switch makes every instance stand aside.
+- **Case lighting** — optionally publishes each frame's colours to [ambience-rgb](https://github.com/Jxn01/ambience-rgb),
+  which drives the RGB hardware inside the PC.
+- **Runs unattended** — autostart on both systems, single-instance lock, no console windows, Home Assistant writes
+  kept off the capture loop.
 
-- a Windows or Linux machine doing the screen capture locally
-- Home Assistant as the control plane
-- Matter or other light entities exposed in Home Assistant as normal `light.*` entities
-- an ambient-lighting goal somewhere between whole-screen wash and zone-aware ambilight
-
-Instead of adding another lighting server or streaming stack, MatterLights captures the screen directly on the PC and updates the exact Home Assistant entities you already use.
-
-## Highlights
-
-- Ambience engine that renders the screen's overall light as a weighted palette across near/far bulb groups, plus the older zoned and shared-variant modes.
-- Autonomous (screen-driven) and custom (static color or looping pattern) playback modes, switchable live from Home Assistant.
-- OLED-aware dark detection so black scenes can drop the lights to off.
-- Display-sleep aware: when the monitor powers off, the lights follow it off.
-- Turns the lights off when the machine shuts down, so the room does not stay lit.
-- Saturation and dominant-color tuning aimed at vivid ambient lighting rather than washed-out averages.
-- One Home Assistant dashboard holds every setting (*The lights hub*): helpers mirrored both ways with the running loop, so a phone, a wall tablet or the other OS sees the same values.
-- A status sensor in Home Assistant says what the loop is doing, which lamps answer, and any recent problem.
-- No console windows: the sync loop runs as `pythonw.exe` or a systemd user unit.
-- One color engine on both platforms: capture hands over BGRx bytes and every color decision downstream is identical.
-- Autostart for the sync loop: a Windows scheduled task, or a systemd user unit on Linux.
-
-## Architecture
+## How it works
 
 ```mermaid
 flowchart LR
-	Win[Windows: DXGI Desktop Duplication] --> Sampler[Color Sampler]
-	Lin[Linux: Mutter/portal -> PipeWire] --> Sampler
-	Sampler --> Sync[Sync Loop]
-	Sync --> HA[Home Assistant REST API]
-	HA --> Lights[Configured light.* entities]
-	Helpers[Home Assistant helpers: switches, mode, colour, pattern, engine, zones, screen] <--> Mirror[Hub mirror thread]
-	Mirror <--> State[Per-OS control + zone files]
-	State --> Sync
-	Sync --> Status[Status sensor]
+    Win[Windows: DXGI Desktop Duplication] --> Sampler[Colour engine]
+    Lin[Linux: Mutter ScreenCast → PipeWire] --> Sampler
+    TV[LG TV frames over UDP] --> Sampler
+    Sampler --> Sync[Sync loop]
+    Sync --> HA[Home Assistant REST API] --> Lights[light.* entities]
+    Sync --> RGB[ambience-rgb]
+    Helpers[Home Assistant helpers] <--> Mirror[Settings mirror] <--> State[Control and zone files] --> Sync
 ```
 
-## Quick start
+Capture hands BGRx bytes to one platform-free colour engine, so every colour decision is identical on both systems.
+On Windows it uses DXGI Desktop Duplication (with a GDI fallback); on Linux, GNOME's ScreenCast API over PipeWire,
+read through GStreamer, with the xdg-desktop-portal as a fallback (where the user picks the screen in a dialog).
 
-MatterLights runs the same way on both platforms; only setup differs.
+## Install
 
 ### Linux (GNOME Wayland)
 
 ```bash
+# Arch
+sudo pacman -S --needed python-gobject gstreamer gst-plugins-base gst-plugin-pipewire
+# Debian / Ubuntu
+sudo apt install python3-gi gstreamer1.0-pipewire gstreamer1.0-plugins-base
+
 scripts/linux/install.sh
 ```
 
-That script creates the virtualenv, installs the package, checks Home Assistant,
-and offers to install the systemd units. Run it once, put your token in the
-`.env` it creates, then run it again.
-
-**It will refuse a conda interpreter, on purpose.** See
-[Linux setup](#linux-setup) below for why, and for the system packages you need.
+PyGObject and GStreamer come from the distribution, not pip, so the virtualenv must be created from the system Python
+(the installer refuses a conda interpreter for that reason). The installer creates it at
+`~/.local/share/venvs/matterlights`, writes `.env` from `.env.example`, checks Home Assistant, and offers two systemd
+units: `matterlights-sync` (a user unit tied to the graphical session) and `matterlights-lights-off` (a system unit that
+turns the lights off at shutdown). Put your token in `.env` and run it again.
 
 ### Windows
-
-#### Fastest path
-
-If you want the shortest setup path from a fresh clone, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\guided-setup.ps1
 ```
 
-That guided script will:
+It creates `.venv`, installs the package, asks for your Home Assistant token, lists your `light.*` entities to choose
+from, writes `.env`, and can install the logon task (`scripts\install-autostart.ps1`), which runs the sync loop with
+`pythonw.exe` so no console window appears.
 
-- create the virtual environment if needed
-- install the package
-- prompt locally for your Home Assistant token
-- discover `light.*` entities from Home Assistant
-- write your selected configuration to `.env`
-- optionally install Windows autostart
-- optionally start the sync loop immediately
+## Home Assistant
 
-#### Manual setup
+Every setting lives in Home Assistant helpers, mirrored both ways with the running loop. Each one is optional; set its
+entity in `.env`:
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e .
-Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m matterlights.discover
-```
-
-Then edit `.env`, add your real Home Assistant token and light entities, and start the sync loop:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-sync.ps1
-```
-
-The helper script backgrounds itself by default, so it does not keep a visible terminal window open.
-
-
-## Linux setup
-
-### What it needs, and why some of it is not a pip dependency
-
-MatterLights captures the screen on Linux through **PipeWire**, driven by
-**GStreamer** and **PyGObject**. Those are distribution packages, not pip
-packages — `pip install PyGObject` needs meson plus cairo and glib headers and
-usually fails. They are therefore deliberately *not* declared in
-`pyproject.toml`, and the installer checks for them instead.
-
-```bash
-# Arch / Garuda
-sudo pacman -S --needed python-gobject gstreamer gst-plugins-base gst-plugin-pipewire
-
-# Debian / Ubuntu
-sudo apt install python3-gi gstreamer1.0-pipewire gstreamer1.0-plugins-base
-```
-
-### ⚠️ The virtualenv must come from the system Python
-
-Because those bindings are system packages, the virtualenv has to be created
-with `--system-site-packages` **and from the distribution interpreter** — a venv
-inherits the site-packages of whichever Python created it.
-
-```bash
-/usr/bin/python3 -m venv --system-site-packages ~/.local/share/venvs/matterlights
-```
-
-The Linux venv lives **outside the checkout** -- `$XDG_DATA_HOME/venvs/matterlights`, usually
-`~/.local/share/venvs/matterlights`; override with `MATTERLIGHTS_VENV`. A checkout may be shared
-with Windows (one tree on a drive both halves of a dual boot mount), and Windows' venv is
-`.venv` in the checkout, where its scheduled tasks run it. A Linux venv in the same place would
-collide with it: one `pyvenv.cfg`, and `lib`/`Lib` differ only in case. `scripts/linux/linux-venv.sh`
-is the one place the location is decided, and `tests/test_linux_venv.py` holds every Linux
-script and unit to it. **Installed before 2026-09-26?** Re-run `scripts/linux/install.sh`, then
-delete the old Linux `.venv` -- the one with a `bin/` directory; a `.venv` with `Scripts/` is Windows'.
-
-**`python3` on your PATH may not be that interpreter.** If you have miniconda,
-pyenv or similar, `python3` is theirs, and a venv built from it has its own
-site-packages with no `gi` in them. The venv then comes up looking perfectly
-healthy and dies at the first capture. `scripts/linux/install.sh` refuses a
-conda interpreter outright for exactly this reason; override the choice with
-`MATTERLIGHTS_PYTHON=/path/to/python3` if you know better.
-
-### Why X11 screen capture cannot work here
-
-On a Wayland session, X11 capture returns a **completely black frame**. This is
-not a bug in `mss` or in any other X11 grabber, and no configuration fixes it:
-XWayland is a real X server and knows the monitor layout the compositor tells
-it, but native Wayland windows are never composited into the X11 root window, so
-there is nothing in the buffer to read. Geometry is metadata; pixels are
-content, and XWayland has only the first.
-
-That is why capture goes through the compositor instead.
-
-### The two capture backends
-
-| Backend | When it is used | Consent dialog |
+| Helper | Setting | What it does |
 | --- | --- | --- |
-| `org.gnome.Mutter.ScreenCast` | GNOME sessions | none, ever |
-| `org.freedesktop.portal.ScreenCast` | everything else | once, then remembered via a restore token |
-
-The choice is made by asking whether `org.gnome.Mutter.ScreenCast` exists on the
-session bus — that is, *is this GNOME?* — and **never** by catching an error
-from it. A Mutter call that fails means GNOME answered badly (a race with
-`gnome-shell` starting, a dropped D-Bus call), and the right response is to
-retry. Falling back to the portal there would raise a consent dialog that an
-autostarted service meets at login with nobody present to click it, and the sync
-loop would sit there apparently running while driving nothing.
-
-On the portal path, **the user picks the screen in the dialog**, so neither
-`SCREEN_CAPTURE_TARGET` nor the Screen select in Home Assistant can choose it.
-
-### ⚠️ Capture uses `RecordArea` for every target, including single monitors
-
-`RecordMonitor` looks like the obvious call for "record this one screen". It is
-not used, because on the development machine's primary display — a 3840×2160
-panel at **240 Hz with variable refresh rate (VRR)** — it delivered **no frames
-at all**, while `RecordArea` over that monitor's identical rectangle delivered a
-frame in under a tenth of a second. The two 60 Hz outputs worked either way, so
-VRR is the only property that differs, though causation is unconfirmed. It is
-also intermittent: the same call succeeded earlier the same day.
-
-There is deliberately no "try `RecordMonitor` first" fast path. A capture
-backend that quietly stops working once a game starts is worse than useless,
-because a gaming monitor is the only screen anyone wants this program to sync to.
-
-### Linux autostart
-
-`scripts/linux/install.sh` offers to install two systemd units:
-
-| Unit | Scope | Purpose |
-| --- | --- | --- |
-| `matterlights-sync.service` | user | the sync loop |
-| `matterlights-lights-off.service` | **system** | turns the lights off at shutdown |
-
-The localhost dashboard and its `matterlights-dashboard.service` were retired on 2026-11-12 (*The lights hub*);
-the installer stops, disables and deletes a unit an older install left behind.
-
-```bash
-systemctl --user status matterlights-sync
-journalctl --user -u matterlights-sync -f
-systemctl --user restart matterlights-sync
-scripts/linux/uninstall.sh          # removes the units, keeps .env and the venv
-```
-
-⚠️ **The user units are `PartOf=graphical-session.target`, and that matters.**
-If you have lingering enabled (`loginctl enable-linger`), a user unit bound to
-`default.target` would survive logout — with the compositor gone, capture dies
-and the lights stay stuck on their last color. `PartOf` makes logging out stop
-the unit, which sends `SIGTERM`, which turns the lights off.
-
-⚠️ **The lights-off unit is a system unit, not a user one**, for the same reason
-the Windows equivalent must run as SYSTEM: the thing being torn down cannot be
-the thing that reports the teardown. Its `ExecStart` does nothing; all the work
-is in `ExecStop`, ordered `After=network-online.target` — systemd stops units in
-reverse dependency order, so that is what makes it run while the network is
-still up.
-
-## Running the sync loop
-
-The sync loop is the one long-running process: it captures the screen, updates your lights and mirrors every
-setting to Home Assistant.
-
-```powershell
-.\.venv\Scripts\python.exe -m matterlights     # Windows
-```
-```bash
-~/.local/share/venvs/matterlights/bin/python -m matterlights   # Linux
-systemctl --user start matterlights-sync        # or, once installed
-```
-
-**Restart** it from Home Assistant (`input_button.<prefix>_restart`, *The lights hub*): the loop finishes its tick,
-turns nothing off, releases its single-instance lock and starts the same command line again (`main()` returns 75 to
-`run()`). On Linux that is `os.execv` — the same PID, so the systemd unit never sees it stop. Windows has no exec, so
-a fresh copy is started and the old one exits 0: Task Scheduler then shows the task as finished while the loop runs on,
-and a logoff (or `Stop-Process`) is what stops it until the next logon. From a shell: `systemctl --user restart matterlights-sync`,
-or on Windows `Stop-ScheduledTask` / `Start-ScheduledTask -TaskName 'MatterLights Screen Sync'`.
-
-## Ambience mode (recommended)
-
-`COLOR_SYNC_MODE=ambience` replaces "what is the strongest color on screen?" with "if the screen were the only light source in the room, what would the room look like?" The older dominant-color engines weight vivid pixels so heavily that a small bright-red patch on an otherwise muted frame paints the whole room red; ambience mode weights colors by the light they actually contribute — screen area times brightness, with only a mild lift for saturation — so that patch earns, at most, a single accent bulb.
-
-Each frame is clustered into a small weighted palette, then rendered by two physical light groups:
-
-- **Near group** — the bulbs beside the screen. They carry the palette's strongest components: the screen's glow.
-- **Far group** — the bulbs deeper in the room. Their slots are shared out across the palette in proportion to weight, so their additive blend reproduces the frame's overall balance. A frame that averages to a muddy brown is rendered as its live components — some amber, some teal — whose mix *is* that brown, instead of six bulbs all showing the same flat average.
-
-Bulb assignments are matched against what each bulb showed last frame, so a near-tie flip in the palette does not make two bulbs trade colors.
-
-Set the near group with `AMBIENCE_NEAR_LIGHTS` (comma-separated entity IDs). If unset, the `PRIMARY_LIGHT_ZONE_NAMES` mapping is reused, and failing that, the first two entities. Zones are not used in this mode.
-
-## Playback modes
-
-MatterLights has two playback modes, switchable live from Home Assistant's **mode** select (*The lights hub*). The choice is written to `CONTROL_STATE_FILE` and the running sync loop picks it up automatically (no restart needed).
-
-- **Autonomous** — the default screen-driven behavior described above.
-- **Custom** — ignores the screen and drives every light from either a single static color or a looping multi-color pattern. Useful as mood lighting when you are not gaming or watching anything.
-
-### Color vs. white
-
-Every custom color — the solid color and each pattern step — can be either an **RGB color** or a **tunable white** color temperature (for bulbs that support white mode, like the Ledvance Matter PAR16). Pick **Colour** (the `#rrggbb` text helper) or **White** (the Kelvin slider, 1500–8000 K) in the colour-type select; the brightness slider applies to both. You can mix them in one pattern, e.g. fade from a warm white into a color and back.
-
-### Patterns
-
-A pattern is an ordered list of colors that loops, typed as one line into Home Assistant's pattern text helper. Each color has two timings:
-
-- **Hold** — how many seconds to stay on that color.
-- **Fade in** — how many seconds the previous color takes to fade into this one. The fade uses Home Assistant's `transition` service parameter.
-
-> **Fades are off by default.** Many Matter bulbs (including the Ledvance PAR16) lock up when sent a `transition` command and have to be power-cycled, so pattern fades are capped by `MAX_PATTERN_TRANSITION_SECONDS` (default `0`, meaning colors snap). If your bulbs are known to handle transitions, set it above `0` in `.env` to enable fades.
-
-**The pattern line.** Steps are separated by `,` (or `;`); each step is a colour, a hold and an optional fade-in, in
-seconds: the colour is `#rrggbb` or a white such as `2700K` (clamped to 1500–8000 K). Case and extra spaces do not
-matter. At most `MAX_PATTERN_STEPS` (24) steps, and the whole line must fit Home Assistant's 255 characters. For
-example:
-
-```text
-#ff0000 3, #0000ff 4 1, #ffff00 0 2
-```
-
-That is red for 3 s → fade to blue over 1 s → blue for 4 s → fade to yellow over 2 s → loop back to red: a 10-second
-loop (the total is the sum of every hold and fade). A line that does not parse is left in Home Assistant as typed,
-the pattern that was playing keeps playing, and the status sensor's `setting_problems` names the bad step (`step 2
-('purple 3'): 'purple' is neither #rrggbb nor a white like 2700K`) until it is corrected. An empty line is refused the
-same way.
-
-### Choosing the capture screen
-
-Home Assistant's **Screen** select (`HA_SCREEN_ENTITY`, *The lights hub*) picks which screen autonomous mode samples.
-This machine writes its options:
-
-- **Primary screen** — whichever screen the OS currently calls primary.
-- **All screens** — the whole virtual desktop as one image.
-- one entry per attached screen, e.g. `Screen 2 · DP-2 · 3840×2160 · primary`.
-
-The choice is stored in `CONTROL_STATE_FILE`, so it applies immediately without restarting the sync loop. With no
-choice stored, `SCREEN_CAPTURE_TARGET` applies. If the selected screen is later disconnected or powered off, the sync loop logs a warning and falls back to `SCREEN_CAPTURE_TARGET` until it returns.
-
-### Screen sleep
-
-When the monitor goes to sleep, the lights turn off in both modes. This is the same idea as OLED dark detection, but it also covers custom mode and is driven by the actual display power state rather than screen content — `GUID_CONSOLE_DISPLAY_STATE` on Windows, and `org.gnome.Mutter.DisplayConfig`'s `PowerSaveMode` on Linux (falling back to polling `/sys/class/drm/*/dpms`, which needs no compositor at all).
-
-On Linux, a `PowerSaveMode` of `-1` means "Mutter does not know" and is deliberately treated as **on**. Reading an unknown state as off would turn the lights out in a room somebody is sitting in. Set `RESPECT_DISPLAY_SLEEP=false` to keep custom colors on while the screen sleeps.
-
-While the screen is asleep the sync loop keeps sweeping: any bulb that was unavailable when the screen went to sleep, or that only came back afterwards, is still turned off on a later tick. The lights come back when the display wakes.
-
-### Shutdown, restart and logoff
-
-Three independent layers turn the lights off when the PC goes away, on both
-platforms. They overlap on purpose — the first is the fastest but least
-reliable, the last is the slowest but cannot be bypassed.
-
-**The same lesson applies on both systems, in mirror image.** On Windows an
-ordinary interactive scheduled task fires on shutdown and then dies with
-`0xC000026B` — the session is already being destroyed, so no process can start
-in it — and only a task running as **SYSTEM**, in session 0, actually works. The
-Linux equivalent is exact: a **user** unit dies with the session, so it cannot be
-the thing that reports the session dying. That is why the Linux layer is a
-*system* unit. In both cases: the thing being torn down cannot be the thing that
-reports the teardown.
-
-#### On Linux
-
-| Layer | Mechanism | Covers | Latency |
-| --- | --- | --- | --- |
-| System unit **(the one that works)** | `matterlights-lights-off.service`, `ExecStop=python -m matterlights.lights_off`, ordered `After=network-online.target` | Shutdown and reboot | Under a second |
-| In-process hook | `SIGTERM` / `SIGINT` handler in the sync loop | `systemctl --user stop`, **logout** (the unit is `PartOf=graphical-session.target`), Ctrl-C | Immediate |
-| Home Assistant | Automation watching a heartbeat entity go stale | Everything, including a crash, a hard reset, or the power going out | ~3 minutes |
-
-The in-process layer is considerably more trustworthy on Linux than on Windows,
-because `systemctl stop` and a logout that stops a `PartOf=` unit both send a
-real `SIGTERM` and wait `TimeoutStopSec` for it. It still does not cover a
-shutdown, because systemd stops the whole user manager.
-
-The signal handler **chains to the previous handler** rather than swallowing the
-signal. Turning the lights off must not turn MatterLights into a program that
-ignores `SIGTERM`; systemd would then wait out `TimeoutStopSec` and `SIGKILL` it
-at every single logout and shutdown.
-
-Install and test it without rebooting:
-
-```bash
-sudo systemctl enable --now matterlights-lights-off.service
-sudo systemctl stop matterlights-lights-off.service    # runs ExecStop: lights go off
-sudo systemctl start matterlights-lights-off.service   # re-arm for the next shutdown
-```
-
-#### On Windows
-
-| Layer | Mechanism | Covers | Latency |
-| --- | --- | --- | --- |
-| Scheduled task **(the one that works)** | Task Scheduler trigger on System event **1074**, running `python -m matterlights.lights_off` **as SYSTEM** | Shutdown and restart | Under a second |
-| In-process hook | `WM_QUERYENDSESSION` to a hidden top-level window in the sync loop | Logoff, and any session end where the process is still alive to be told — **not** an ordinary `shutdown /r /t 0` | Immediate |
-| Home Assistant | Automation watching a heartbeat entity go stale | Everything, including a crash, a hard reset, or the power going out. Does **not** cover a normal reboot, which completes well inside the staleness window | ~3 minutes |
-
-Set `TURN_OFF_ON_SHUTDOWN=false` to disable the in-process hook. The shutdown is never blocked: the hook always tells Windows it may proceed, and a Home Assistant that is unreachable at that moment cannot delay it.
-
-**Why the scheduled task must run as SYSTEM.** This is the whole ballgame, and it is not optional. Registered as an ordinary interactive task, it triggers correctly — one second after event 1074 — and then dies with `0xC000026B`, `STATUS_DLL_INIT_FAILED_LOGOFF`: *"the application failed to initialize because the window station is shutting down."* By the time event 1074 is written, the interactive session is already being destroyed and Windows will not start a new process in it. SYSTEM runs in session 0, which is still alive, so the process actually starts. The helper needs nothing from the user session: the token and the absolute `LOG_PATH` both come from `.env`.
-
-**Why the in-process hook is not enough.** Measured across eight days and eight session ends, its callback fired *zero* times — while its window was demonstrably alive and answering `WM_QUERYENDSESSION` sent from another process in 5 ms. The same `0xC000026B` explains it: the interactive session is torn down abruptly rather than being given the usual "please close" conversation, which is what `shutdown /r /t 0` asks for. Moving the hook from `WM_ENDSESSION` to `WM_QUERYENDSESSION` did not change this — a real reboot afterwards still produced no log line. It is kept because it costs nothing and does work for a plain logoff, but **do not rely on it**; the SYSTEM task is the layer that actually turns the lights off.
-
-Install the scheduled task once, **from an elevated PowerShell** (registering a SYSTEM task requires it):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-shutdown-task.ps1
-```
-
-Test it without rebooting, and remove it again, with:
-
-```powershell
-Start-ScheduledTask -TaskName 'MatterLights Lights Off At Shutdown'
-powershell -ExecutionPolicy Bypass -File .\scripts\install-shutdown-task.ps1 -Remove
-```
-
-### The Home Assistant fallback
-
-The sync loop refreshes `HEARTBEAT_ENTITY_ID` (default `sensor.matterlights_heartbeat`) every `HEARTBEAT_INTERVAL_SECONDS`, writing an ISO timestamp. An automation in Home Assistant turns the lights off once that timestamp is more than three minutes old.
-
-This is the only layer that survives events Windows never gets to report — a crash, a reset button, a power cut. It uses a template *trigger*, so it fires once per transition: if you switch the lights on yourself after the PC is gone, it will not keep turning them back off.
-
-Two consequences worth knowing:
-
-- On a dual-boot machine, booting the other OS also stops the heartbeat, so the lights turn off once about three minutes in.
-- An instance that is standing aside (another machine owns the lamps, or **manual control** is on) does not refresh the
-  heartbeat, so the automation must be conditioned on manual control being off — `lights_hub.py` in the owner's HA tools
-  adds `condition: state input_boolean.lamps_manual off` (see *The lights hub*).
-- Set `HEARTBEAT_ENTITY_ID=` (empty) to disable publishing the heartbeat entirely.
-
-The automation is not created by this repo's installer — it lives in Home Assistant. The equivalent YAML is:
+| `input_boolean` ×2 | `HA_LIGHTS_SWITCH_ENTITY`, `HA_RGB_SWITCH_ENTITY` | master switches for the bulbs and for the case lighting |
+| `input_boolean` | `HA_MANUAL_ENTITY` | while on, no instance touches the bulbs, so a colour set by hand stays |
+| `input_select` | `HA_MODE_ENTITY` | *Follow the screen*, *Saved colour* or *Saved pattern* |
+| `input_select` | `HA_SCREEN_ENTITY` | which screen to capture; the running machine writes the options (its monitors) |
+| sensor | `HA_STATUS_ENTITY` | what the loop is doing, with the engine, the bulbs that answer and recent problems |
+| helpers named `<prefix>_*` | `HA_HUB_PREFIX` | saved colour, white, brightness and pattern, the colour engine, one zone per bulb, a restart button |
+
+A pattern is typed as one line: steps separated by commas, each a colour (`#rrggbb` or a white like `2700K`), a hold in
+seconds and an optional fade-in — `#ff0000 3, #0000ff 4 1, #ffff00 0 2` is a 10-second loop. A value that cannot be
+applied stays in Home Assistant as typed and is reported on the status sensor until it is corrected.
+
+Shared helpers follow one rule: on the first reading Home Assistant wins (so either half of a dual-boot machine picks
+up where the other left off); after that, whichever side changed is copied to the other. The screen select is the
+exception — monitor numbers belong to one OS, so the running machine wins.
+
+**Safety net.** The loop refreshes `sensor.matterlights_heartbeat` with a timestamp every 30 seconds. An automation
+turns the lights off once it is three minutes old, which covers a crash, a reset or a power cut:
 
 ```yaml
 alias: MatterLights - lights off when the PC stops reporting
@@ -408,8 +111,7 @@ trigger:
       {% if raw in ['unknown', 'unavailable', 'none', ''] %}false
       {% else %}{{ (now() - (raw | as_datetime)).total_seconds() > 180 }}{% endif %}
 condition:
-  # with manual control (The lights hub) every instance stands aside and stops the heartbeat
-  - condition: state
+  - condition: state            # an instance standing aside stops its heartbeat
     entity_id: input_boolean.lamps_manual
     state: "off"
 action:
@@ -418,617 +120,54 @@ action:
       entity_id: <your HA_LIGHT_ENTITIES>
 ```
 
-### Home Assistant switches
-
-The **Lights** and **RGB** master switches live in Home Assistant, as two on/off helpers
-(`input_boolean`) that the sync loop keeps equal to the control file in both directions.
-Set either or both of:
-
-```ini
-HA_LIGHTS_SWITCH_ENTITY=input_boolean.matterlights_lights
-HA_RGB_SWITCH_ENTITY=input_boolean.matterlights_rgb
-```
-
-Create the helpers in Home Assistant first (Settings → Devices & services → Helpers → Toggle).
-Any entity that turns on and off works -- the mirror calls `homeassistant.turn_on`/`turn_off`, not
-`input_boolean.*` -- but a helper is the natural fit.
-
-How it behaves (`src/matterlights/ha_switches.py`):
-
-- **The first successful reading wins for Home Assistant.** The control file is per OS while the
-  helper is shared, so whichever half of a dual-boot machine starts follows the switch as it was
-  last left -- by the other OS, in Home Assistant, or from a phone while the PC was off.
-  🚨 **A new `input_boolean` starts `off`.** Set both helpers to the state you want *before* the
-  sync loop first sees them, or the first reading switches the lamps and the RGB off.
-- After that, **whichever side moved since the last agreed value is copied to the other**:
-  a change to the control file is pushed to Home Assistant, a Home Assistant change is written into the
-  control file (the `lightsOn`/`rgbOn` keys only, read fresh at write time, so a mode or pattern
-  saved in between is never rolled back). Nothing is echoed back. If both sides moved they moved
-  to the same value -- a switch is a boolean -- so there is nothing to resolve.
-- **No reading is not "off".** Home Assistant unreachable, the entity missing (404), `unknown` or
-  `unavailable`: the switch is left as it is, a warning is logged once, and the mirror retries.
-  The first *real* reading still counts as the first contact.
-- A push Home Assistant refuses is retried on the next poll; the local switch keeps its value.
-- It polls every `HA_SWITCH_POLL_SECONDS` (default 1 s) on a thread of its own, never on the
-  capture loop, so a slow Home Assistant cannot stall screen capture.
-- The heartbeat fallback above is independent of it: it turns the bulbs off when the PC goes
-  away but never touches the helpers, so they keep saying what you want when the PC returns.
-
-Both empty (the default) mirrors nothing and starts no thread.
-
-## The lights hub (Home Assistant)
-
-Since 2026-11-12 every light setting lives in one Home Assistant dashboard (the owner's is `lights.jxn.hu`), and the
-localhost pages (the dashboard and the zone designer) are gone: the owner asked for *"no configurable anything
-remaining in localhost"*. Five helpers set one by one, each optional:
-
-| Helper | Setting | Who writes it | Direction, first reading |
-| --- | --- | --- | --- |
-| `input_boolean.matterlights_lights` / `_rgb` | `HA_LIGHTS_SWITCH_ENTITY` / `HA_RGB_SWITCH_ENTITY` | either side | both ways; Home Assistant wins the first reading (*Home Assistant switches*) |
-| `input_boolean.lamps_manual` | `HA_MANUAL_ENTITY` | Home Assistant | read only: while **on**, no instance touches the bulbs |
-| `input_select.matterlights_mode` | `HA_MODE_ENTITY` | either side | both ways; options exactly *Follow the screen* / *Saved colour* / *Saved pattern*; Home Assistant wins the first reading (the helper is shared by both halves of a dual boot) |
-| `input_select.matterlights_screen` | `HA_SCREEN_ENTITY` | this machine writes the options | both ways; **this machine wins** the first reading (monitor numbers belong to one OS) |
-| `sensor.matterlights_status` | `HA_STATUS_ENTITY` | this process | written on change and every 10 minutes |
-
-**Manual control.** With `input_boolean.lamps_manual` on, every instance stands aside exactly as if another machine
-owned the lamps — no colours, no switching them off for the master switch or a sleeping display, nothing at shutdown —
-so a colour set in Home Assistant stays. It is a helper of its own, not a value of the owner selector, because that
-selector also picks the soundbar's input. Set `HA_MANUAL_ENTITY` on **every** instance (the TV's gets it from tv-hub's
-deploy), and condition the stale-heartbeat automation on it (*The Home Assistant fallback*). When manual control ends,
-the owner takes the lamps back on its second reading and forgets which lamps it had confirmed off, so an off-state
-(the master switch, a sleeping display) sweeps every lamp again. Verified 2026-11-12 on the real lamps (the owner selector on the rig): a colour set
-in Home Assistant survived screen changes, a stale heartbeat (249 s) and the shutdown path, and turning manual control
-off put the lamp back under the PC. The TV's instance reads the helper (it logs *Manual control on*); the case of the
-selector on the TV with the TV playing is not yet tested.
-
-**Mode.** *Follow the screen* = autonomous; *Saved colour* / *Saved pattern* = custom mode playing what the control file
-holds. A pattern with no saved steps is refused (the control file is never written in a shape that would not load
-back; Home Assistant is set back to the mode that really runs). The colour and the pattern are the hub helpers below.
-
-**Screen.** The options are *Primary screen*, *All screens* and one per monitor (`Screen 2 · DP-2 · 3840×2160 ·
-primary`; Windows' `\\.\DISPLAYn` names are left out), rewritten whenever the monitors change (checked every minute on
-the capture loop's thread — Windows' capture library may not be called from another). Set `HA_SCREEN_ENTITY` and
-`HA_STATUS_ENTITY` only on the instance that captures the screen, in `.env.linux` / `.env.windows`.
-
-**Status words:** *Following the screen*, *Saved colour*, *Saved pattern*, *Lamps off*, *Display asleep*, *Manual
-control*, *<owner> has the lamps*, *Starting* (taking over waits for a second reading). Attributes:
-
-| Attribute | What it holds |
-| --- | --- |
-| `mode`, `screen`, `os` | the mode label, the capture screen, `Linux` / `Windows` |
-| `engine` | the colour engine running now (*Ambience*, *Zoned*, *Shared variant*) |
-| `lights_available`, `lights_unavailable` | how many configured bulbs Home Assistant reports available, and the entity ids of the others |
-| `recent_problems` | the last 8 warnings or errors the loop logged, `HH:MM message` |
-| `setting_problems` | helper → why its value could not be applied (a mistyped pattern or colour), until it is corrected |
-
-### Every other setting: `HA_HUB_PREFIX`
-
-With `HA_HUB_PREFIX=matterlights` (letters, digits, `_`) the sync loop also mirrors these helpers, `<p>` being the
-prefix (`src/matterlights/ha_hub.py`):
-
-| Helper | Holds | Values |
-| --- | --- | --- |
-| `input_number.<p>_brightness` | the saved colour's and pattern's brightness | 1–100 % (stored 1–255) |
-| `input_select.<p>_colour_type` | what the saved colour is | `Colour` / `White` |
-| `input_text.<p>_colour` | the saved colour | `#rrggbb` |
-| `input_number.<p>_kelvin` | the saved white | 1500–8000 K |
-| `input_text.<p>_pattern` | the saved pattern, one line (*Patterns*) | e.g. `#ff3300 2 1, 2700K 3 0.5`, max 255 characters |
-| `input_select.<p>_engine` | the colour engine, live — overrides `COLOR_SYNC_MODE` | `Ambience` / `Zoned` / `Shared variant` |
-| `input_select.<p>_zone_<n>` | the screen zone of light *n* (`HA_LIGHT_ENTITIES` order, from 1), saved to `LIGHT_ZONE_FILE` | a preset name (`full`, `top-left`, `top-center`, …) or `custom` |
-| `input_button.<p>_restart` | restart the sync loop (*Running the sync loop*) | a press |
-
-How it behaves:
-
-- **Same rule as the mode:** the helpers are shared by both halves of a dual boot, so the first successful reading
-  **Home Assistant wins**; after that whichever side moved since the agreed value is copied to the other, and nothing
-  is echoed back. Rounding is not a change (1 % is stored as 3/255 and shown as 1 % again).
-- **A value that cannot be applied is kept in Home Assistant as typed**, never overwritten: the running value stays,
-  the status sensor's `setting_problems` says why, a warning is logged once, and the value is applied the moment it is
-  corrected. The entry goes as soon as both sides hold the same value again, however they got there.
-- **The engine** picked in Home Assistant applies at the next tick. Picking the engine `.env` already names stores
-  "inherit", so a later `COLOR_SYNC_MODE` change still takes effect. Only *Ambience* feeds the RGB extension while the
-  lamps are on (*RGB extension*); with the lamps switched off the case keeps following the screen whatever the engine.
-- **Zones** are used by the `zoned` and `shared-variant` engines only. A preset replaces that light's zone in the
-  zones file; `custom` means a zone drawn by hand in the zones file (it is shown, and cannot be picked over a preset).
-  The presets are fractions of the captured screen, so they mean the same on either OS.
-- **The restart button** fires on a press seen after the first reading, never on the first reading itself, so a
-  restart cannot loop.
-- **No reading is not a value:** an unreachable Home Assistant or a missing helper leaves both sides alone.
-- **One request per poll:** every helper is read with a single `POST /api/template` that returns their states as
-  JSON (`HomeAssistantClient.get_states`), and the control and zones files are parsed once per poll. A request per
-  helper and a parse per binding (the first version) doubled the loop's idle CPU (0.93 % of a core against 0.49 %).
-- A saved pattern longer than 255 characters (one the retired editor could make) cannot be shown in Home Assistant:
-  it keeps playing, `setting_problems` says so, and typing a pattern in Home Assistant replaces it.
-- The helpers must exist with these options and limits; create them by hand (Settings → Devices & services →
-  Helpers) or with a script. Set `HA_HUB_PREFIX` on the instances that capture a screen; a TV instance has no use for
-  it (tv-hub's deploy does not copy it).
-
-**Where the retired pages went.** Start/stop/restart → the restart button (or systemd / Task Scheduler). The log tail
-→ the status sensor's `recent_problems` (the full log: `journalctl --user -u matterlights-sync`, or the log file).
-The saved colour, pattern and brightness, the engine and the zones → the hub helpers. The capture screen → the Screen
-select. The zone designer's screenshot overlay and the capture preview have no replacement: zones are presets now.
-
 ## Two machines, one set of bulbs
 
-The lights can follow a second source: a matterlights on another machine, watching something
-other than this PC's screen. Two loops driving the same bulbs is a strobe, so a selector in Home
-Assistant names the owner and each instance says which value means itself:
+Two loops driving the same bulbs is a strobe, so `HA_OWNER_ENTITY` names a selector in Home Assistant and
+`HA_OWNER_VALUE` the value that means this instance. An instance that is not the owner leaves the bulbs completely
+alone — no colours, no lights-off, no heartbeat. Taking over waits for a second reading, so the old owner's last colour
+cannot land on top of the new owner's first.
 
-```ini
-HA_OWNER_ENTITY=input_select.tv_media_owner
-HA_OWNER_VALUE=Rig
-```
-
-How it behaves (`src/matterlights/owner.py`):
-
-- **Not the owner: hands off, completely.** No colours, no lights-off from the master switch or a
-  sleeping display, no lights-off at shutdown (the sync loop's hook and `lights_off` both ask), and
-  no heartbeat, so Home Assistant's stale-heartbeat fallback keeps watching the instance that really
-  has the bulbs. The RGB extension is this machine's own and carries on.
-- **Becoming the owner** forgets what it last sent, so every bulb gets the current colour at once. It
-  waits for a second reading first, and letting go is immediate, so the old owner's last colour cannot
-  land on top of the new owner's first act.
-- **It starts out not owning**, and **no reading keeps the last answer**: Home Assistant restarting
-  neither starts a second driver nor stops the first. A shutdown that cannot get a reading acts as
-  it always did.
-- It polls every `HA_SWITCH_POLL_SECONDS` on a thread of its own.
-
-Both empty (the default) means there is no owner to ask and this instance always drives the bulbs.
-
-### An LG TV as the source
-
-`CAPTURE_SOURCE=tv` replaces the screen with frames sent over UDP by a rooted TV's companion
-(`src/matterlights/capture/tv.py`, the sending half is the `tv-hub` project). The packet is `JXNF`,
-then `!IHHB` (sequence, width, height, flag), then packed RGB; the frames are 64 x 36, so set
-`SAMPLE_STRIDE=1`.
-
-| What the TV sends | What the bulbs do |
-| --- | --- |
-| Frames (flag 1) | Follow the picture, through the same colour engine as a screen. |
-| Protected (flag 2): Netflix hides its picture from capture | A steady warm glow. |
-| Idle (flag 0): the TV's Home screen, its saver, standby, or Netflix with the warm glow turned off | Off. |
-| Nothing for 6 seconds: a TV that is off sends nothing | Off. |
-
-Idle and silence are a black frame, not a skipped tick. A skipped tick would freeze the bulbs on the
-last colour for as long as the TV stays off; a black frame takes the road a dark screen already
-takes, which turns the lights off once and then sends nothing.
-
-Run it with `RESPECT_DISPLAY_SLEEP=false` and `TURN_OFF_ON_SHUTDOWN=false`: the machine has no
-display of its own, and its restart must not darken a room. Packets from anyone but
-`TV_FRAME_SENDER` are ignored.
-
-## Windows autostart
-
-
-Install the startup task for the sync loop (the dashboard was retired on 2026-11-12 — *The lights hub*; the script removes an older install's dashboard task):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
-```
-
-Remove them later with:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\remove-autostart.ps1
-```
-
-Installed task: `MatterLights Screen Sync`.
-
-It runs the venv's `pythonw.exe` directly -- `-m matterlights` -- which never opens a console. A hidden PowerShell host cannot do this: Windows 11's default console is Windows Terminal, which ignores `-WindowStyle Hidden`, and this script's earlier form put a terminal window on the taskbar at every logon. With no console, startup errors go to the log (`LOG_PATH` in `.env`, or `%LOCALAPPDATA%\matterlights\matterlights.log`), and the script checks for the venv and `.env` once, when it installs, rather than at every start. If the task already exists and was last written from an elevated shell, run the script elevated, or re-registering it is refused. `scripts\start-sync.ps1` without `-Foreground` starts `pythonw.exe` in the background the same way.
-
-The task has no time limit. Task Scheduler's default stops a task 72 hours after its logon trigger started it, so a session left logged in for three days lost its sync, and the sync's own log simply ended. Tasks the script installed before 2026-09-10 carry both faults -- the terminal window and the 72-hour limit -- and re-running `install-autostart.ps1` replaces them. A copy already running keeps its old definition until it next starts, so log off and back on. Afterwards `(Get-ScheduledTask 'MatterLights Screen Sync').Actions.Execute` ends in `pythonw.exe` and `.Settings.ExecutionTimeLimit` reads `PT0S`.
+`CAPTURE_SOURCE=tv` replaces the screen with 64×36 frames sent over UDP by a companion app on a rooted LG TV. Frames
+are followed like a screen; a "protected" flag (DRM-protected video) gives a steady warm glow; idle or no frames for six
+seconds turns the lights off.
 
 ## Configuration
 
-Settings come from four places. Highest precedence first:
+Every setting, the per-OS overlays and the zone names are in [docs/configuration.md](docs/configuration.md). The most
+important ones: `HA_URL`, `HA_TOKEN`, `HA_LIGHT_ENTITIES`, `COLOR_SYNC_MODE` (`ambience` recommended) and
+`AMBIENCE_NEAR_LIGHTS` (the bulbs beside the screen).
 
-1. **the process environment** -- a variable set in the shell or a unit's `Environment=`;
-2. **this OS's overlay**, `.env.linux` or `.env.windows`, beside `.env`;
-3. **`.env`**;
-4. the built-in default below.
-
-An **empty value means "not set here"** and falls through to the next source -- so `LOG_PATH=`
-in an overlay restores the per-OS default over a `.env` that names another OS's path.
-`.env` is found at `MATTERLIGHTS_ENV_FILE` if that is set (the systemd units set it), else in
-the working directory, else in the checkout. Relative paths in any setting resolve from the
-directory `.env` is in.
-
-### One checkout, two OSes
-
-A checkout can serve both halves of a dual boot -- the author's is one tree on an NTFS drive
-that Windows and Linux both mount. Everything that differs per OS is then kept apart by name:
-
-| What | Shared | Per OS |
-| --- | --- | --- |
-| Settings | `.env` -- the token, the bulbs, the zones, everything common | `.env.linux` / `.env.windows` -- e.g. `RGB_PUBLISH_SOCKET` (a unix socket on Linux, `udp://127.0.0.1:45731` on Windows), `LOG_PATH`, `SYNC_INTERVAL_SECONDS`, `SAMPLE_STRIDE` |
-| Zone layout, playback state | -- | `.matterlights-zones.<os>.json`, `.matterlights-control.<os>.json` (a hand-drawn layout or a monitor number means nothing on the other OS; the hub helpers carry the shareable values between them) |
-| Virtualenv | -- | Windows: `.venv` in the checkout. Linux: outside it, `~/.local/share/venvs/matterlights` (see Linux setup) |
-| Log, portal restore token | -- | the OS's state directory (see `LOG_PATH`) |
-
-**Never set `LIGHT_ZONE_FILE` or `CONTROL_STATE_FILE` in a shared
-`.env`** -- an explicit value beats the per-OS default, so both OSes would read and overwrite
-the same file. Set one only in an overlay. (`.env.example` shipped them pinned to the old
-OS-less names until 2026-09-26; delete those lines from a `.env` made from it. `PREVIEW_OVERRIDE_FILE` belonged to the
-retired zone designer and is no longer read.)
-
-`<os>` is `linux` or `windows`. A state file with the older, OS-less name
-(`.matterlights-zones.json`) is still used while the OS has no file of its own, so a single-OS
-install keeps working; before sharing a checkout between OSes, rename it to its owner's name.
-All of these files are gitignored (`.env.*`, `.matterlights-*.json`), and
-`tests/test_config.py` fails the build if one stops being.
-
-### Every setting
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `HA_URL` | `http://192.168.10.2:8123` | Base URL of Home Assistant. |
-| `HA_TOKEN` | *(required)* | Home Assistant long-lived access token. |
-| `HA_LIGHT_ENTITIES` | *(required by the sync loop; `discover` runs without it)* | Comma-separated list of light entities to control. |
-| `LIGHT_ZONE_LAYOUT` | empty | Ordered zone names matched one-to-one to `HA_LIGHT_ENTITIES`. |
-| `LIGHT_ZONE_FILE` | `.matterlights-zones.<os>.json` beside `.env` | The saved zone layout; the zone selects in Home Assistant write it (*The lights hub*). Without it, `LIGHT_ZONE_LAYOUT` applies. |
-| `CONTROL_STATE_FILE` | `.matterlights-control.<os>.json` beside `.env` | Where the playback mode (autonomous/custom) and pattern are stored. |
-| `RESPECT_DISPLAY_SLEEP` | `true` | `true` to turn the lights off when the monitor sleeps. |
-| `TURN_OFF_ON_SHUTDOWN` | `true` | `true` to turn the lights off at shutdown, restart or logoff. |
-| `RGB_EXTENSION_ENABLED` | `false` | Publish frames to the local RGB extension (ambience-rgb). Off: nothing is published. |
-| `RGB_PUBLISH_SOCKET` | empty | Where to publish: a unix datagram socket path (Linux), or `udp://127.0.0.1:PORT` (Windows, which has no unix datagram sockets). A per-OS value -- put it in the overlay. |
-| `HEARTBEAT_ENTITY_ID` | `sensor.matterlights_heartbeat` | Entity the sync loop refreshes so Home Assistant can notice the PC is gone (crash, hard reset, power cut). Empty disables it. |
-| `HEARTBEAT_INTERVAL_SECONDS` | `30.0` | How often the heartbeat is refreshed. |
-| `HA_LIGHTS_SWITCH_ENTITY` | *(empty: not mirrored)* | On/off entity in Home Assistant kept equal to the control file's **Lights** switch, both ways. Must be an entity ID (`domain.name`). See [Home Assistant switches](#home-assistant-switches). |
-| `HA_RGB_SWITCH_ENTITY` | *(empty: not mirrored)* | Same, for the **RGB** switch. |
-| `HA_SWITCH_POLL_SECONDS` | `1.0` | How often the switch mirror polls Home Assistant and the control file. Must be greater than 0. |
-| `HA_OWNER_ENTITY` | *(empty: always the owner)* | Entity in Home Assistant naming which instance drives the bulbs. See *Two machines, one set of bulbs*. |
-| `HA_OWNER_VALUE` | *(empty)* | The value of `HA_OWNER_ENTITY` that means this instance. Required with it. |
-| `HA_MANUAL_ENTITY` | *(empty: no manual control)* | An on/off helper (`input_boolean.lamps_manual`). While it is **on**, this instance leaves the bulbs entirely alone — no colours, no switching them off (master switch, display sleep, shutdown) — so a colour set in Home Assistant stays. Set it on **every** instance (tv-hub's deploy copies it to the TV's). See *The lights hub*. |
-| `HA_MODE_ENTITY` | *(empty: not mirrored)* | An `input_select` with exactly the options *Follow the screen*, *Saved colour*, *Saved pattern*, mirrored both ways with the control file's mode (Home Assistant wins the first reading). See *The lights hub*. |
-| `HA_SCREEN_ENTITY` | *(empty: not mirrored)* | An `input_select` whose options this machine writes — *Primary screen*, *All screens* and one entry per monitor — mirrored both ways with the control file's capture screen (this machine wins the first reading: monitor numbers are per OS). Only on the instance that captures the screen; set it in `.env.linux` / `.env.windows`. |
-| `HA_STATUS_ENTITY` | *(empty: no status)* | An entity id this process writes (like the heartbeat): what the loop is doing — *Following the screen*, *Saved colour*, *Saved pattern*, *Lamps off*, *Display asleep*, *Manual control*, *<owner> has the lamps*, *Starting* — with the attributes `mode`, `screen`, `os`, `engine`, `lights_available`, `lights_unavailable`, `recent_problems`, `setting_problems` (*The lights hub*). Posted on change and every 10 minutes. Only on the screen instance (`.env.<os>`). |
-| `HA_HUB_PREFIX` | *(empty: not mirrored)* | Prefix of the hub helpers (`matterlights` → `input_number.matterlights_brightness`, …): the saved colour, white, brightness and pattern, the colour engine, each light's zone and a restart button, mirrored both ways (Home Assistant wins the first reading). Letters, digits and `_` only. See *The lights hub* → *Every other setting*. |
-| `CAPTURE_SOURCE` | `screen` | `screen`, or `tv` for frames from an LG TV. |
-| `TV_FRAME_BIND` | `0.0.0.0` | Address the TV source listens on. |
-| `TV_FRAME_PORT` | `8792` | UDP port the TV source listens on. |
-| `TV_FRAME_SENDER` | *(empty)* | The TV's address; packets from anyone else are ignored. Required with `CAPTURE_SOURCE=tv`. |
-| `COLOR_SYNC_MODE` | `zoned` | `ambience` (recommended), `zoned`, or `shared-variant`. |
-| `PRIMARY_LIGHT_ZONE_NAMES` | `top-center,bottom-left` | Primary bulbs used in shared-variant mode. |
-| `AMBIENCE_NEAR_LIGHTS` | empty | Entity IDs of the bulbs beside the screen (ambience mode's near group). |
-| `SCREEN_CAPTURE_TARGET` | `primary` | Default screen: `primary`, `all`, or a 1-based monitor index. Overridable live from Home Assistant's Screen select. **Indices are per-OS and unrelated**: Windows numbers them in `mss` enumeration order, Linux sorts Mutter's logical monitors by position. Ignored on the portal capture path, where the user picks the screen in the consent dialog. |
-| `REQUEST_TIMEOUT_SECONDS` | `3.0` | Timeout of each Home Assistant request from the sync loop. |
-| `SESSION_END_TIMEOUT_SECONDS` | `10.0` | How long the session-end turn-off waits for Home Assistant. Longer than `REQUEST_TIMEOUT_SECONDS` because it gets one attempt and no retry. |
-| `AVAILABILITY_REFRESH_SECONDS` | `5.0` | How often the sync loop re-reads which bulbs Home Assistant reports available. |
-| `SYNC_INTERVAL_SECONDS` | `0.2` | Capture cadence. Lower is faster and heavier. |
-| `INTER_LIGHT_DELAY_SECONDS` | `0.4` | Pause between consecutive bulb updates within one batch. |
-| `MAX_PARALLEL_LIGHT_UPDATES` | `1` | Upper bound for concurrent Home Assistant light updates. |
-| `COLOR_CHANGE_THRESHOLD` | `12` | How far a colour must move before a bulb is sent it again. |
-| `LIGHT_UPDATE_INTERVAL_SECONDS` | `0.0` | Minimum gap between Home Assistant writes, independent of the sync rate -- lets the RGB extension run fast without asking Matter bulbs for more than they can take. `0.0` writes whenever the colour moves enough. |
-| `BRIGHTNESS_FLOOR` | `0` | Minimum brightness on active updates. |
-| `TRANSITION_SECONDS` | `0.0` | Transition sent with sync-loop updates and turn-offs. |
-| `MAX_PATTERN_TRANSITION_SECONDS` | `0.0` | Caps custom pattern fades; `0` snaps (safe for Matter bulbs that freeze on transitions). |
-| `DARK_THRESHOLD` | `12` | Average brightness at or below which the screen counts as dark. |
-| `DARK_ACTIVE_RATIO_THRESHOLD` | `0.05` | Share of non-dark pixels at or below which a dark screen turns the lights off. |
-| `COLOR_BOOST` | `1.15` | Saturation multiplier applied after sampling. |
-| `SAMPLE_STRIDE` | `24` | Pixel stride when sampling a frame: higher is cheaper and coarser. |
-| `ERROR_RETRY_SECONDS` | `5.0` | Back-off after a batch of bulb updates fails. |
-| `LOG_PATH` | per-OS state dir | Log file. Defaults per-OS: `%LOCALAPPDATA%\matterlights\matterlights.log` on Windows, `$XDG_STATE_HOME/matterlights/matterlights.log` (usually `~/.local/state/matterlights/`) on Linux. `none`, `off` or `-` log to stdout only. Keep an explicit path in the OS's overlay, not in a shared `.env`. |
-| `MATTERLIGHTS_ENV_FILE` | *(environment only)* | Path of `.env`; its overlay is read from beside it. Set by the systemd units. |
-
-`tests/test_readme_settings.py` fails the build when `config.py` reads a setting this table
-does not list.
-
-Recognized zone names:
-
-- `full`
-- `top-left`, `top-center`, `top-right`
-- `right-top`, `right-center`, `right-bottom`
-- `bottom-right`, `bottom-center`, `bottom-left`
-- `left-bottom`, `left-center`, `left-top`
-- `center`
-
-Example perimeter layout:
-
-```dotenv
-LIGHT_ZONE_LAYOUT=top-left,top-center,top-right,bottom-right,bottom-center,bottom-left
-```
-
-## Optional: local RGB extension
-
-MatterLights can hand each tick's ambience colours to a separate program that
-drives RGB hardware on the same machine — motherboard headers, RAM, GPU, an AIO
-pump — so the case matches the lamps. The companion project is
-[`ambience-rgb`](https://github.com/Jxn01/ambience-rgb), on Linux and Windows.
-
-**Off by default and inert when off.** With `RGB_EXTENSION_ENABLED=false` nothing
-is published, no socket is opened, and the publisher module is never even imported.
-
-```ini
-RGB_EXTENSION_ENABLED=true
-# Linux: the extension's unix datagram socket
-RGB_PUBLISH_SOCKET=/run/user/1000/ambience-rgb.sock
-# Windows: UDP on the loopback, since Windows has no unix datagram sockets
-# RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731
-```
-
-`ambience-rgb devices` prints the exact value to paste. A plain path is a unix
-datagram socket, resolved from the `.env` directory like every other path;
-`udp://HOST:PORT` is UDP, and a malformed one is refused when the settings load.
-Both carry the same payload and both are fire-and-forget.
-
-⚠️ **On Windows a UDP send to a closed port fails on the *next* send.** The
-closed port answers with an ICMP port-unreachable, and Winsock reports it to the
-socket's following `sendto` as `WSAECONNRESET`, after which Microsoft calls the
-socket unusable. So the publisher replaces its socket on the next tick, warns
-once, and says the listener is back only after **two** clean sends in a row —
-over UDP a single clean send proves nothing, and a stopped extension would
-otherwise flap the log between a warning and a recovery twice a second.
-
-⚠️ **`SYNC_INTERVAL_SECONDS` is the ceiling for the RGB extension too**, since it
-only ever sees what this loop publishes. Raising the extension's own `usb_hz`
-above this rate buys nothing. Measured on `jxn-garuda` at `SAMPLE_STRIDE=121`,
-capturing a 3840x2160 screen:
-
-| `SYNC_INTERVAL_SECONDS` | rate | CPU |
-|---|---|---|
-| `0.2` | 5 Hz | 16.3% of one core |
-| `0.1` | 10 Hz | 32.4% of one core |
-| `0.05` | 20 Hz | 44.9% of one core (16.6% with numpy) |
-
-**numpy changes this picture completely.** Walking the pixels *is* the sync
-loop's cost, and `sample_frame` now vectorises it when numpy is importable,
-falling back to the original Python loop where it is not (Windows). Measured on a
-3840×2160 frame:
-
-| Sampling | pixels/frame | Python | numpy |
-|---|---|---|---|
-| `SAMPLE_STRIDE=121` | 68,950 | 23.9 ms (42 Hz) | **1.8 ms (571 Hz)** |
-| stride 25 | 331,776 | 115.5 ms (8.7 Hz) | **5.8 ms (172 Hz)** |
-| stride 9 | 921,600 | 307.0 ms (3.3 Hz) | **14.7 ms (68 Hz)** |
-
-A guard test asserts the two paths produce identical histograms, palettes and
-mixes — otherwise the same screen would light differently depending on whether
-numpy happened to be installed.
-
-**Two further cuts (2026-11-12), both exact. Output was compared byte-for-byte
-against the previous implementation on real, noise and all-black 4K frames:**
-
-- **A still screen costs nothing.** Both capture backends return the *same*
-  `bytes` object on every tick while nothing on screen changes. The loop used to
-  histogram it twenty times a second anyway, about 15 % of a core at 4K.
-  `ambience._sample_frame_cached` returns the previous result when the very same
-  object comes back (about 4 µs). It keys on identity and only for immutable
-  `bytes`, so a backend that refilled one mutable buffer in place could never
-  freeze the lights. The Windows GDI fallback returns a fresh `bytearray` and
-  simply never hits. Anything on screen that animates (a terminal spinner, a
-  video) still produces new frames and is sampled as before.
-- **Laned bincount.** A real screen is mostly one dark colour, so nearly every
-  sample falls into one histogram bin. `np.bincount`'s `out[key] += w` then waits
-  on the previous add to that same slot, sample after sample. Each bin is spread
-  over 8 slots by sample position (`_HISTOGRAM_LANE_BITS`), and the slots are
-  summed back afterwards. Integer-valued float sums are exact, so the histogram is
-  unchanged. At stride 25 on a real 4K frame `sample_frame` went from **6.6 ms to
-  3.6 ms**; on noise, which never piles into one bin, from 5.8 to 4.7 ms.
-
-### ⚠️ The bulbs need their own rate
-
-`SYNC_INTERVAL_SECONDS` and the Home Assistant write rate used to be the same
-knob. Taking the loop to 20 Hz for the RGB extension's benefit therefore asked
-six Matter bulbs for twenty updates a second, and they answered with
-`ReadTimeout` — fifteen a minute, measured. The two devices want completely
-different rates: one is a mains lamp over the network, the other is a USB strip
-on the desk.
-
-`LIGHT_UPDATE_INTERVAL_SECONDS` caps the bulb writes independently. `0.0` keeps
-the old behaviour. Skipping a bulb update does **not** skip the RGB publish.
-
-Settled here: 20 Hz loop, `SAMPLE_STRIDE=25`, `LIGHT_UPDATE_INTERVAL_SECONDS=0.2`
-— **30.0% of one core, zero bulb timeouts**, and 4.8× finer colour sampling than
-the 5 Hz configuration it replaced. The capture stream is not a separate limit —
-`caps_framerate()` asks Mutter for **the sync rate itself** (20 fps of 4K at 20 Hz;
-twice the rate until 2026-11-12). Each frame costs gnome-shell a copy of the whole
-monitor: while gaming, gnome-shell fell from 48 % to 33 % of a core with this
-stream stopped, back when it ran at 40 fps. At 1× a tick reads a frame at most one
-tick old, which the 5 Hz bulbs and the smoothed RGB cannot show. The process's own
-cost is dominated by sampling, so lowering `SAMPLE_STRIDE` for finer colour
-multiplies it again.
-
-### 🚨 Home Assistant writes never run on the capture loop
-
-They are network calls with a multi-second timeout. Inline, one unreachable
-Matter bulb froze *everything* for its duration — capture, sampling, and the RGB
-publish — and the extension then went dark on its staleness rule, so a single
-flaky bulb blanked the whole case every minute or two.
-
-`light_worker.LightWorker` runs the call on one background thread. Only the call
-moves: every piece of shared state (`last_colors`, `off_entity_ids`,
-`retry_entity_ids`) is read by `_build_desired_states` on the loop thread and
-written when the loop *collects* the result, so nothing races. If a request
-arrives while one is in flight it replaces any request still queued — a backlog
-of light updates is worthless, since by the time a stale one was sent the screen
-has moved on.
-
-Measured at the socket, 20 Hz, with **8 bulb timeouts during the run**:
-
-| | |
-|---|---|
-| frames | 1498 in 75 s |
-| median gap | 50 ms |
-| p99 | 54 ms |
-| **max gap** | **58 ms** |
-
-Inline, each of those timeouts was a 3000 ms gap.
-
-When every light fails, the loop sets a `light_backoff_until` deadline instead of
-sleeping — Home Assistant gets its rest and capture carries on regardless.
-
-⚠️ **A Home Assistant failure must not take the RGB extension down with it.**
-When a bulb refuses writes the loop backs off for `ERROR_RETRY_SECONDS`, which is
-right — there is no point hammering it. But the extension is a bystander watching
-the same screen, and it goes dark after three seconds of silence, correctly,
-because a frozen frame looks exactly like working sync. Sleeping through the
-backoff therefore turned the whole case off and on again on every retry, with
-nothing in either log to say why. `_sleep_publishing` keeps republishing the last
-frame for the duration instead.
-
-Enabled, two things change:
-
-* Each ambience frame is sent as one JSON datagram to that socket — near colour,
-  far colour, brightness, active ratio, and MatterLights' own `screen_dark`,
-  `display_on`, `lights_on` and `rgb_on` decisions.
-
-  Since **payload version 2** it also carries `palette`: the frame's whole
-  weighted colour palette, richest first, as `{"rgb": [r,g,b], "weight": f}`.
-  Six bulbs can only show one colour each, so the engine's four-colour palette
-  was being collapsed to a single near/far pair before it reached the socket. A
-  consumer with a 97-LED strip can render the whole thing as a gradient instead.
-  The list is always present, empty when the mode produces no palette, so a
-  consumer never has to tell absent from empty. `near` and `far` are unchanged
-  and still published alongside.
-
-  ⚠️ **`near` and `far` are the colours the bulbs EMIT, not the colours sampled
-  off the screen.** Home Assistant takes `rgb_color` and `brightness` as two
-  separate arguments and normalises the colour, so a lamp fed `(24, 24, 23)` at
-  brightness 255 shows a bright warm white. Addressable RGB hardware has no
-  brightness channel — its brightness *is* the magnitude of the triple — so the
-  magnitude is folded in before publishing (`render_for_leds`), using the same
-  `BRIGHTNESS_FLOOR` and the same dark cutoff the bulbs get. Publishing the raw
-  sample instead looks fine on a bright screen and renders the whole rig black
-  on a dark one; that shipped once. `brightness` is the near sample's effective
-  brightness, carried for information — a consumer that applies it again will
-  double-count.
-* An **RGB: On / Off** switch (`HA_RGB_SWITCH_ENTITY` in Home Assistant) sits
-  beside the lights switch, written as `rgbOn` into the same control file. One
-  source of truth, so the two can never disagree.
-
-⚠️ **The extension can never affect your lights.** Publishing is fire-and-forget
-on a datagram socket: no listener, a deleted socket or a slow reader all drop the
-frame silently and the sync loop carries on. This is asserted by tests, because
-the failure it prevents — bulbs going dark because an unrelated program stopped —
-would be the worst kind of coupling.
-
-Only `ambience` mode publishes. Custom colours and patterns drive the bulbs only.
-
-## Practical expectations
-
-MatterLights looks best when it is used as ambient room lighting, not as a frame-perfect LED strip replacement.
-
-- Home Assistant plus Matter bulbs are convenient, but they are not a low-latency streaming transport.
-- The current tuning favors vivid, coherent ambience over literal per-pixel fidelity.
-- Shared-variant mode is often the best match for ceiling lights or bulbs not physically attached to the display.
-- If you need true sub-frame ambilight behavior for games, a direct streaming stack such as WLED DDP/UDP or Hue Entertainment is still the stronger transport.
-
-## Troubleshooting
-
-### Lights are not changing
-
-- Confirm `HA_TOKEN` and `HA_LIGHT_ENTITIES` are correct.
-- Run `.\.venv\Scripts\python.exe -m matterlights.discover` and verify the entity IDs exist.
-- Look at the status sensor in Home Assistant: its state says what the loop is doing, `lights_unavailable` names the
-  bulbs Home Assistant cannot reach, `recent_problems` holds the last warnings.
-- Check the log: `journalctl --user -u matterlights-sync` on Linux, `%LOCALAPPDATA%\matterlights\matterlights.log` on Windows.
-
-### Linux: "No frame arrived from the capture stream"
-
-- Confirm the screen is actually awake: `busctl --user get-property org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig PowerSaveMode` should print `i 0`.
-- Confirm the capture backend picked a source: `journalctl --user -u matterlights-sync | grep "Capture source"`.
-- If it says PyGObject or GStreamer is missing, the venv was built from the wrong interpreter — see [the virtualenv warning](#️-the-virtualenv-must-come-from-the-system-python).
-
-### Linux: the lights stay on after logging out
-
-The sync loop's unit is probably not tied to the graphical session. Check that
-`systemctl --user cat matterlights-sync` shows `PartOf=graphical-session.target`.
-With lingering enabled and that line missing, the unit survives logout.
-
-### Windows: the lights go black in an exclusive-fullscreen game (open, 2026-10-26)
-
-**What is known.** Warframe, 2026-10-25, with the lamps switched off and the case/soundbar following the screen:
-**borderless fullscreen kept the lights in sync, exclusive fullscreen turned them all black** (the owner switched
-the game's display mode back and forth). The log of that session shows no capture error and no Desktop Duplication
-access loss during play, so the capture either delivered **black frames** or **no new frames** (dxcam then returns
-nothing and the last frame is reused). The log cannot say which: the RGB-only path (the one that runs while the
-lamps are switched off) decided "screen dark" without a log line and swallowed capture failures at DEBUG.
-
-**What the code does since.** Logging and one defensive step, nothing that claims to be the fix:
-- Both loop paths share one edge-triggered logger (`_Edges` in `main.py`): `Watched screen (…) went dark` /
-  `is active again`, and in the RGB-only path `RGB-only capture failing (…)` once per failure streak and
-  `RGB-only capture recovered`.
-- `capture/fullscreen_watch.py` polls the shell's notification state once a second
-  (`SHQueryUserNotificationState`: `3 = exclusive D3D fullscreen`, `2 = busy` is a non-exclusive fullscreen app,
-  `5 = normal desktop`; every value is spelled out in the log) and logs **`Fullscreen state A -> B; frames since the
-  last report: N fresh, M reused; last fresh frame … ago; last frame WxH via dxgi|gdi, mean brightness X/255`** at
-  every change, and the same summary every 30 s while exclusive. One exclusive session answers "black frames"
-  (fresh frames, brightness near 0) vs "no frames" (reused frames, last fresh frame long ago).
-- While exclusive and no fresh Desktop Duplication frame has arrived for 5 s, the camera is **released and rebuilt**
-  (at most 3 times per exclusive episode, logged as `re-creating the camera (n of 3 …)`). Releasing matters: dxcam
-  keeps one instance per output and `dxcam.create` hands an unreleased one straight back — the old failure path only
-  forgot the camera, so it kept the broken one; it now releases too.
-
-**To test:** play ~1 minute in exclusive fullscreen, switch back, then read
-`%LOCALAPPDATA%\matterlights\matterlights.log` for the `Fullscreen state` lines. Until it is solved, borderless
-fullscreen is the mode that keeps the lights in sync.
-
-### Black scenes do not dim enough
-
-- Lower `DARK_THRESHOLD` or increase `DARK_ACTIVE_RATIO_THRESHOLD`.
-- Verify the screen content is actually dark in the sampled area and not surrounded by bright UI.
+Many Matter bulbs lock up when sent a `transition`, so fades are off by default (`MAX_PATTERN_TRANSITION_SECONDS=0`).
 
 ## Development
 
-Local install:
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e .
-```
-
-Useful manual checks:
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m compileall src tests
-powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
-```
-
-With PowerShell 7 on `PATH`, or `MATTERLIGHTS_PWSH` pointing at a `pwsh` anywhere, the suite also parses every script under `scripts\` with it; without one, only that test skips. The rest of `tests/test_windows_launchers.py` reads the scripts as text and runs everywhere.
-
-On Linux:
-
 ```bash
-VENV=~/.local/share/venvs/matterlights   # outside the checkout -- see Linux setup
+VENV=~/.local/share/venvs/matterlights
 /usr/bin/python3 -m venv --system-site-packages "$VENV"
 "$VENV/bin/python" -m pip install -e .
-"$VENV/bin/python" -m unittest discover -s tests -v
+"$VENV/bin/python" -m unittest discover -s tests
+scripts/linux/test-under-wine.sh          # the same suite on Windows CPython under Wine
 ```
 
-The same suite runs on **Windows CPython under Wine**, from Linux, with nothing installed:
-`scripts/linux/test-under-wine.sh` (python.org's embeddable 3.12.10 plus Windows wheels, in
-`~/.cache/matterlights-wine`). There `sys.platform` is `win32`, so the Windows code paths and the
-`.env.windows` overlay really run; DXGI and user32 are Wine's, so a pass is a good sign, not proof.
-
-Platform-specific tests skip on the other OS rather than failing, so the suite
-is green on both. One test earns special mention:
-`tests/test_import_surface.py` imports **every** module in the package on the
-current platform. It exists because a single platform-specific import at module
-scope is invisible on the platform it was written on — `screen.py` once began
-with `from ctypes import windll`, which made the entire package unimportable on
-Linux with nothing in the build to say so.
-
-## Repository layout
+On Windows: `.\.venv\Scripts\python.exe -m unittest discover -s tests`. Platform-specific tests skip on the other
+system, and `tests/test_import_surface.py` imports every module on the current platform, so a platform-specific
+import at module scope fails the build.
 
 ```text
-src/matterlights/        Python package
-  capture/               screen capture: windows (DXGI/GDI), linux (PipeWire), mutter, portal
-  display_power/         screen-sleep detection, per platform
-  shutdown_hook/         session-end detection, per platform
-  screen.py              the color and zone engine — platform-free
-  ha_switches.py         the Lights/RGB switches mirrored to Home Assistant, both ways
-  ha_selects.py          the mode and screen selects, and the status sensor
-  ha_hub.py              every other setting as Home Assistant helpers (HA_HUB_PREFIX)
-  owner.py               which instance drives the bulbs; manual control
-scripts/                 Windows setup and runtime helpers
-scripts/linux/           Linux installer and uninstaller
-systemd/                 unit files (@INSTALL_DIR@ is substituted at install time)
-tests/                   Smoke, config and platform tests
-assets/                  README visuals
+src/matterlights/
+  capture/            screen capture: Windows (DXGI/GDI), Linux (PipeWire via Mutter or the portal), the TV source
+  display_power/      screen-sleep detection, per platform
+  shutdown_hook/      session-end detection, per platform
+  screen.py           the colour and zone engine (platform-free)
+  ambience.py         the ambience engine
+  ha_switches.py      the master switches, mirrored with Home Assistant
+  ha_selects.py       the mode and screen selects, and the status sensor
+  ha_hub.py           the other settings as Home Assistant helpers
+  owner.py            which instance drives the bulbs; manual control
+scripts/              Windows setup and autostart; scripts/linux: installer, Wine test runner
+systemd/              unit files
 ```
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

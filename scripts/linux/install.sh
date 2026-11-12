@@ -110,8 +110,7 @@ install_unit() {   # $1 = source unit, $2 = destination dir, $3 = sudo or empty
 
 if ask "Install the user unit (the sync loop, started with your desktop session)?"; then
     install_unit matterlights-sync.service "$USER_UNIT_DIR"
-    # The localhost dashboard was retired on 2026-11-12 -- every setting lives in Home Assistant (README -> The lights
-    # hub). An older install left its unit behind: stop it, disable it, delete it.
+    # The localhost dashboard was retired (every setting lives in Home Assistant); remove an older install's unit.
     if [ -e "$USER_UNIT_DIR/matterlights-dashboard.service" ]; then
         systemctl --user disable --now matterlights-dashboard.service 2>/dev/null || true
         rm -f "$USER_UNIT_DIR/matterlights-dashboard.service"
@@ -131,7 +130,7 @@ if ask "Install the system unit that turns the lights off at shutdown (needs sud
 fi
 
 bold "Done."
-echo "  Settings:       Home Assistant -- every one of them (README -> The lights hub)"
+echo "  Settings:       Home Assistant -- every one of them (README -> Home Assistant)"
 echo "  Sync logs:      journalctl --user -u matterlights-sync -f"
 echo "  Stop for now:   systemctl --user stop matterlights-sync"
 echo "  Remove it all:  scripts/linux/uninstall.sh"

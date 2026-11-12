@@ -1,9 +1,4 @@
-"""Every setting config.py reads is documented in the README's settings table.
-
-The table used to list "the most important settings" -- 23 of the 36 the code
-read. Documentation that is illustrative rather than exhaustive is how a
-setting ends up known only to whoever wrote it.
-"""
+"""Every setting config.py reads is documented in docs/configuration.md, and nothing else is."""
 
 from __future__ import annotations
 
@@ -22,15 +17,15 @@ def settings_read_by_the_code() -> set[str]:
 
 
 def settings_documented() -> set[str]:
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    section = readme[readme.index("### Every setting"):]
+    doc = (REPO / "docs" / "configuration.md").read_text(encoding="utf-8")
+    section = doc[doc.index("## Every setting"):]
     return set(re.findall(r"^\| `([A-Z][A-Z0-9_]+)` \|", section, re.MULTILINE))
 
 
 class ReadmeSettingsTest(unittest.TestCase):
     def test_every_setting_the_code_reads_is_documented(self) -> None:
         missing = settings_read_by_the_code() - settings_documented()
-        self.assertEqual(missing, set(), f"add these to the README's settings table: {sorted(missing)}")
+        self.assertEqual(missing, set(), f"add these to the settings table in docs/configuration.md: {sorted(missing)}")
 
     def test_the_table_documents_nothing_the_code_no_longer_reads(self) -> None:
         stale = settings_documented() - settings_read_by_the_code()
