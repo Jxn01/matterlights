@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import socket
 import struct
+import sys
 import time
 import unittest
 
@@ -46,6 +47,10 @@ class Parsing(unittest.TestCase):
         path = Path(__file__).resolve().parents[2] / "tv-hub/tv/jxn-hub-agent.py"
         if not path.exists():
             self.skipTest("the tv-hub repo is not beside this one")
+        if sys.platform == "win32":
+            # The agent is the TV's Linux program and imports pty (termios). The packet
+            # format does not depend on the OS, so the Linux run of this test covers it.
+            self.skipTest("the TV agent imports pty, which Windows has no equivalent of")
         spec = importlib.util.spec_from_file_location("agent", path)
         agent = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(agent)

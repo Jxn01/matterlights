@@ -70,8 +70,10 @@ class Mark(unittest.TestCase):
 class Placement(unittest.TestCase):
     def test_the_mark_survives_the_user_session(self):
         """/run/user/1000 is torn down with the session, before this unit stops, so the mark cannot live there."""
-        self.assertFalse(str(sync_mark.SYNC_MARK).startswith("/run/user"))
-        self.assertEqual(str(sync_mark.SYNC_MARK), "/run/matterlights/synced")
+        # as_posix(): the mark is a Linux path, and str() of it on Windows -- where the
+        # suite also runs -- is "\\run\\matterlights\\synced".
+        self.assertFalse(sync_mark.SYNC_MARK.as_posix().startswith("/run/user"))
+        self.assertEqual(sync_mark.SYNC_MARK.as_posix(), "/run/matterlights/synced")
 
     def test_the_unit_provides_the_folder(self):
         parser = configparser.ConfigParser(strict=False, interpolation=None)
