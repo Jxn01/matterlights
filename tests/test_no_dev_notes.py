@@ -17,7 +17,7 @@ PATTERNS = {
     "a dated note": re.compile(r"(?<![\w.-])20\d\d-(?:0[1-9]|1[0-2])-[0-3]\d(?![\dT:])"),
     "an attribution": re.compile(r"\(owner\b|\bowner's (?:list|request|decision|call|rule|rig|machine)\b"
                                  r"|\bthe owner (?:asked|said|wants|wanted|decided|chose|confirmed|watched)\b"),
-    "a private reference": re.compile(r"\bKB\b(?! ?/s)|claude-kb|superpowers|EXECUTION-LOG|\bspec §|§\d"),
+    "a private reference": re.compile(r"(?<!\d )(?<!\d)\bKB\b(?! ?/s)|claude-kb|superpowers|EXECUTION-LOG|\bspec §|§\d"),
 }
 #: path -> names of PATTERNS allowed there, for real data (keep this short and say why)
 EXEMPT: dict[str, set[str]] = {}
@@ -25,7 +25,10 @@ SELF = Path(__file__).relative_to(ROOT).as_posix()
 
 
 def tracked() -> list[str]:
-    out = subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True)
+    try:
+        out = subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, encoding="utf-8")
+    except OSError:                                         # no git (e.g. the suite under Wine)
+        raise unittest.SkipTest("git is not available") from None
     if out.returncode != 0:
         raise unittest.SkipTest("not a git checkout")
     return [p for p in out.stdout.splitlines() if p and p != SELF]
@@ -65,6 +68,7 @@ class NoDevelopmentNotes(unittest.TestCase):
             with self.subTest(pattern=name):
                 self.assertTrue(PATTERNS[name].search(sample))
         self.assertFalse(PATTERNS["a dated note"].search('started_at = "2026-10-11T12:00:00+00:00"'))   # data, not a note
+        self.assertFalse(PATTERNS["a private reference"].search("a 64 KB receive buffer"))               # a size
 
 
 if __name__ == "__main__":  # pragma: no cover
