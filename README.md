@@ -76,6 +76,15 @@ It creates `.venv`, installs the package, asks for your Home Assistant token, li
 from, writes `.env`, and can install the logon task (`scripts\install-autostart.ps1`), which runs the sync loop with
 `pythonw.exe` so no console window appears.
 
+To turn the lights off at shutdown and restart, also install the shutdown task once, from an **elevated** PowerShell.
+It runs as SYSTEM on System event 1074 — an in-process hook alone is not reliable there, because the process is torn
+down before its window sees `WM_ENDSESSION`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-shutdown-task.ps1           # -Remove to uninstall
+Start-ScheduledTask -TaskName 'MatterLights Lights Off At Shutdown'                     # test it without rebooting
+```
+
 ## Home Assistant
 
 Every setting lives in Home Assistant helpers, mirrored both ways with the running loop. Each one is optional; set its
