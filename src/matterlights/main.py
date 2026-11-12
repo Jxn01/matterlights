@@ -802,6 +802,12 @@ class _Edges:
     def capture_failed(self, error: BaseException) -> None:
         if not self.capture_failing:
             self.capture_failing = True
+            if isinstance(error, _capture.CaptureUnavailable):
+                # Not a failure -- the same state the normal path logs at INFO: Mutter refuses sessions while the display
+                # sleeps (KB 16-graphics, "Session creation inhibited"). As a WARNING it landed in the status sensor's
+                # recent_problems every time the screen blanked.
+                LOGGER.info("RGB-only capture inhibited (%s); waiting for the display", error)
+                return
             LOGGER.warning("RGB-only capture failing (%s: %s); the RGB goes dark until it recovers",
                            type(error).__name__, error)
 

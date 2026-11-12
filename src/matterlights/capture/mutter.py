@@ -368,7 +368,9 @@ class MutterSource:
             def handler(*_args):
                 if self._closing:
                     return
-                self._logger.warning("Capture session invalidated (%s); rebuilding", reason)
+                # INFO: the display powering down closes the session every time the screen sleeps; a rebuild that then
+                # fails is logged as a warning of its own, so the real faults still surface.
+                self._logger.info("Capture session invalidated (%s); rebuilding", reason)
                 callback = self._on_invalidated
                 if callback is not None:
                     callback(reason)

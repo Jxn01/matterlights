@@ -295,6 +295,20 @@ class EdgesTest(unittest.TestCase):
         self.assertEqual(sum("went dark" in l for l in logs.output), 2)
         self.assertEqual(sum("active again" in l for l in logs.output), 1)
 
+    def test_an_inhibited_capture_is_information_not_a_problem(self):
+        """The display sleeping is not a fault: it must stay out of WARNING (the status sensor's recent_problems)."""
+        from matterlights import capture
+        from matterlights.main import _Edges
+
+        e = _Edges()
+        with self.assertLogs("matterlights", level="INFO") as logs:
+            e.capture_failed(capture.CaptureUnavailable("CreateSession refused while capture is inhibited"))
+        self.assertEqual([l for l in logs.output if l.startswith("WARNING")], [])
+        self.assertTrue(any("inhibited" in l for l in logs.output))
+        with self.assertLogs("matterlights", level="INFO") as logs:   # positive control: a real failure still warns
+            _Edges().capture_failed(RuntimeError("pipeline died"))
+        self.assertTrue(any(l.startswith("WARNING") for l in logs.output))
+
     def test_recovery_is_logged_once(self):
         from matterlights.main import _Edges
 
