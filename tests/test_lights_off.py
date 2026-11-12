@@ -84,3 +84,11 @@ class Placement(unittest.TestCase):
     def test_the_sync_loop_leaves_the_mark_once_it_holds_the_lock(self):
         source = (ROOT / "src/matterlights/main.py").read_text(encoding="utf-8")
         self.assertLess(source.index("acquire_sync_singleton(LOGGER)"), source.index("leave_mark()"))
+
+    def test_the_mark_is_left_only_when_shutdown_turns_the_lights_off(self):
+        """The TV's instance (TURN_OFF_ON_SHUTDOWN=false) warned at every start for a mark nothing would read."""
+
+        source = (ROOT / "src/matterlights/main.py").read_text(encoding="utf-8")
+        guard = source.index("if settings.turn_off_on_shutdown:\n")
+        self.assertLess(guard, source.index("leave_mark()"))
+        self.assertLess(source.index("leave_mark()") - guard, 300)

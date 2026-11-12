@@ -218,7 +218,10 @@ def main() -> int:
     if sync_lock is None:
         LOGGER.warning("Another MatterLights sync loop is already running; this instance will exit.")
         return 0
-    leave_mark()
+    if settings.turn_off_on_shutdown:
+        # Only the shutdown layer reads the mark; an instance that never darkens the room at shutdown (the TV's) has no
+        # use for it, and its host has no /run/matterlights -- that was a warning at every start.
+        leave_mark()
 
     client = HomeAssistantClient(
         settings.ha_url,
