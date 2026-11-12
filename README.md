@@ -457,6 +457,11 @@ trigger:
       {% set raw = states('sensor.matterlights_heartbeat') %}
       {% if raw in ['unknown', 'unavailable', 'none', ''] %}false
       {% else %}{{ (now() - (raw | as_datetime)).total_seconds() > 180 }}{% endif %}
+condition:
+  # with manual control (The lights hub) every instance stands aside and stops the heartbeat
+  - condition: state
+    entity_id: input_boolean.lamps_manual
+    state: "off"
 action:
   - service: light.turn_off
     target:
@@ -520,9 +525,10 @@ so a colour set in Home Assistant stays. It is a helper of its own, not a value 
 selector also picks the soundbar's input. Set `HA_MANUAL_ENTITY` on **every** instance (the TV's gets it from tv-hub's
 deploy), and condition the stale-heartbeat automation on it (*The Home Assistant fallback*). When manual control ends,
 the owner takes the lamps back on its second reading and forgets which lamps it had confirmed off, so an off-state
-(the master switch, a sleeping display) sweeps every lamp again. Verified 2026-11-12 on the real lamps: a colour set in
-Home Assistant survived screen changes, a stale heartbeat (249 s), the shutdown path and the TV's instance; turning
-manual control off put the lamp back under the PC.
+(the master switch, a sleeping display) sweeps every lamp again. Verified 2026-11-12 on the real lamps (the owner selector on the rig): a colour set
+in Home Assistant survived screen changes, a stale heartbeat (249 s) and the shutdown path, and turning manual control
+off put the lamp back under the PC. The TV's instance reads the helper (it logs *Manual control on*); the case of the
+selector on the TV with the TV playing is not yet tested.
 
 **Mode.** *Follow the screen* = autonomous; *Saved colour* / *Saved pattern* = custom mode playing what the control file
 holds. A pattern with no saved steps is refused (the control file is never written in a shape that would not load
