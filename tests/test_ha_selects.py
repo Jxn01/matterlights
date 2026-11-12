@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from matterlights.ha_selects import (
-    MODE_SAVED_COLOUR, MODE_SAVED_PATTERN, MODE_SCREEN, SCREEN_ALL, SCREEN_PRIMARY, STATUS_REFRESH_SECONDS,
+    MODE_SAVED_COLOUR, MODE_SAVED_PATTERN, MODE_SCREEN, SCREEN_ALL, SCREEN_DIALOG, SCREEN_PRIMARY, STATUS_REFRESH_SECONDS,
     SelectMirror, mode_label, screen_choices,
 )
 from matterlights.main import _hub_status
@@ -171,6 +171,22 @@ class Mode(Base):
 
 
 class Screen(Base):
+    def test_the_portal_path_offers_one_honest_option_and_ignores_the_select(self):
+        """The user picked the screen in the portal's dialog: no setting can choose one, so the select says so."""
+
+        ha = FakeHA(**{SCREEN: SCREEN_PRIMARY})
+        m = self.mirror(ha, screen_entity=SCREEN)
+        m.offer_monitors(MONITORS[:2], user_selected=True)
+        before = self.path.read_bytes()
+        m.tick(); m.tick()
+        self.assertEqual(ha.options[SCREEN], [SCREEN_DIALOG])
+        self.assertEqual(ha.states[SCREEN], SCREEN_DIALOG)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual([c for c in ha.calls if c[0] == "options"], [("options", SCREEN, (SCREEN_DIALOG,))])
+        m.offer_monitors(MONITORS)                    # back on a path where settings choose: the real list returns
+        m.tick()
+        self.assertIn(SCREEN_ALL, ha.options[SCREEN])
+
     def test_labels(self):
         labels = [label for label, _ in screen_choices(MONITORS)]
         self.assertEqual(labels, [SCREEN_PRIMARY, SCREEN_ALL, "Screen 1 · HDMI-1 · 1728×3072", "Screen 2 · DP-2 · 3840×2160 · primary"])
@@ -231,7 +247,7 @@ class Status(Base):
         self.assertEqual([p[1] for p in ha.posted], ["Following the screen", "Manual control", "Manual control"])
 
     def test_the_words(self):
-        settings = SimpleNamespace(screen_capture_target="primary", ha_owner_value="Rig")
+        settings = SimpleNamespace(screen_capture_target="primary", ha_owner_value="Rig", color_sync_mode="ambience")
         gate = SimpleNamespace(manual=lambda: False, holder=lambda: "TV")
         self.assertEqual(_hub_status(None, True, ControlState(), True, settings)[0], "Following the screen")
         self.assertEqual(_hub_status(None, True, ControlState(lights_on=False), True, settings)[0], "Lamps off")

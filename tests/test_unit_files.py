@@ -34,7 +34,7 @@ def read_unit(name: str) -> configparser.ConfigParser:
 
 
 class UserUnitTest(unittest.TestCase):
-    UNITS = ("matterlights-sync.service", "matterlights-dashboard.service")
+    UNITS = ("matterlights-sync.service",)   # the dashboard unit retired 2026-11-12 (settings live in Home Assistant)
 
     def test_units_exist(self) -> None:
         for name in self.UNITS:

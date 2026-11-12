@@ -80,7 +80,7 @@ class NoConsoleWindowTest(unittest.TestCase):
         self.assertRegex(text, r'-Execute \$pythonw -Argument "-m matterlights" ')
 
     def test_the_dashboard_no_longer_starts_at_logon_and_an_old_task_goes(self) -> None:
-        """The lights hub (2026-11-12): daily settings live in Home Assistant; the dashboard starts by hand only."""
+        """The lights hub (2026-11-12): every setting lives in Home Assistant and the dashboard is gone; an old task is removed."""
         code = _code(_read("install-autostart.ps1"))
         self.assertNotRegex(code, r'-Argument "-m matterlights\.dashboard"')
         self.assertRegex(code, r"Unregister-ScheduledTask -TaskName \$DashboardTaskName")
@@ -97,7 +97,7 @@ class NoConsoleWindowTest(unittest.TestCase):
                 self.assertIn("-ErrorAction Stop", call)
 
     def test_the_background_starts_use_pythonw(self) -> None:
-        for name in ("start-sync.ps1", "start-dashboard.ps1", "start-zone-ui.ps1"):
+        for name in ("start-sync.ps1",):
             with self.subTest(script=name):
                 self.assertRegex(_read(name), r"Start-Process -FilePath \$pythonwExe ")
 

@@ -108,14 +108,17 @@ install_unit() {   # $1 = source unit, $2 = destination dir, $3 = sudo or empty
     echo "  installed $dst"
 }
 
-if ask "Install the user units (sync, started with your desktop session; the dashboard installed but started by hand)?"; then
-    install_unit matterlights-sync.service      "$USER_UNIT_DIR"
-    # The localhost dashboard is installed but no longer enabled (2026-11-12): daily settings live in Home Assistant's
-    # Lights dashboard (README -> The lights hub). Start it to edit the saved colour, the pattern or zones.
-    install_unit matterlights-dashboard.service "$USER_UNIT_DIR"
+if ask "Install the user unit (the sync loop, started with your desktop session)?"; then
+    install_unit matterlights-sync.service "$USER_UNIT_DIR"
+    # The localhost dashboard was retired on 2026-11-12 -- every setting lives in Home Assistant (README -> The lights
+    # hub). An older install left its unit behind: stop it, disable it, delete it.
+    if [ -e "$USER_UNIT_DIR/matterlights-dashboard.service" ]; then
+        systemctl --user disable --now matterlights-dashboard.service 2>/dev/null || true
+        rm -f "$USER_UNIT_DIR/matterlights-dashboard.service"
+        echo "  removed the retired matterlights-dashboard.service"
+    fi
     systemctl --user daemon-reload
     systemctl --user enable --now matterlights-sync.service
-    systemctl --user disable --now matterlights-dashboard.service 2>/dev/null || true
     bold "Enabled. Status:"
     systemctl --user --no-pager --lines=0 status matterlights-sync.service || true
 fi
@@ -128,8 +131,7 @@ if ask "Install the system unit that turns the lights off at shutdown (needs sud
 fi
 
 bold "Done."
-echo "  Settings:       Home Assistant's Lights dashboard (README -> The lights hub)"
-echo "  Edit patterns:  systemctl --user start matterlights-dashboard -> http://127.0.0.1:$(grep -E '^DASHBOARD_PORT=' "$REPO_ROOT/.env" | cut -d= -f2 || echo 8770)"
+echo "  Settings:       Home Assistant -- every one of them (README -> The lights hub)"
 echo "  Sync logs:      journalctl --user -u matterlights-sync -f"
 echo "  Stop for now:   systemctl --user stop matterlights-sync"
 echo "  Remove it all:  scripts/linux/uninstall.sh"

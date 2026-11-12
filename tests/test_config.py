@@ -23,7 +23,6 @@ class LoadSettingsTests(unittest.TestCase):
                         "HA_LIGHT_ENTITIES=light.one,light.two",
                         "LIGHT_ZONE_LAYOUT=top-left,top-right",
                         "LIGHT_ZONE_FILE=config/zones.json",
-                        "PREVIEW_OVERRIDE_FILE=config/preview.json",
                         "LOG_PATH=logs/matterlights.log",
                     ]
                 ),
@@ -34,7 +33,6 @@ class LoadSettingsTests(unittest.TestCase):
                 settings = load_settings()
 
             self.assertEqual(settings.light_zone_file, base_dir / "config" / "zones.json")
-            self.assertEqual(settings.preview_override_file, base_dir / "config" / "preview.json")
             self.assertEqual(settings.log_path, base_dir / "logs" / "matterlights.log")
 
     def _settings_with(self, *lines: str):
@@ -124,24 +122,6 @@ class LoadSettingsTests(unittest.TestCase):
 
             self.assertFalse(settings.respect_display_sleep)
 
-    def test_rejects_invalid_dashboard_port(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            env_path = Path(temp_dir) / ".env"
-            env_path.write_text(
-                "\n".join(
-                    [
-                        "HA_TOKEN=test-token",
-                        "HA_LIGHT_ENTITIES=light.one",
-                        "DASHBOARD_PORT=70000",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-
-            with patch.dict(os.environ, {"MATTERLIGHTS_ENV_FILE": str(env_path)}, clear=False):
-                with self.assertRaisesRegex(ValueError, "DASHBOARD_PORT"):
-                    load_settings()
-
     def test_rejects_invalid_color_sync_mode(self) -> None:
         with TemporaryDirectory() as temp_dir:
             env_path = Path(temp_dir) / ".env"
@@ -215,7 +195,6 @@ class PerOsConfigTests(unittest.TestCase):
         settings, base = self.load([])
         own = platform_name()
         self.assertEqual(settings.light_zone_file, base / f".matterlights-zones.{own}.json")
-        self.assertEqual(settings.preview_override_file, base / f".matterlights-preview.{own}.json")
         self.assertEqual(settings.control_state_file, base / f".matterlights-control.{own}.json")
 
     def test_a_legacy_state_file_is_used_until_this_os_has_its_own(self) -> None:
@@ -229,11 +208,11 @@ class PerOsConfigTests(unittest.TestCase):
 
 
 class ExampleEnvKeepsStateFilesPerOsTests(unittest.TestCase):
-    """🚨 .env.example pinned all three state files to one shared name, so every
+    """🚨 .env.example pinned all the state files to one shared name, so every
     install made from it defeated the per-OS defaults -- on a shared checkout,
     both OSes then read and overwrote one zone layout."""
 
-    STATE_KEYS = ("LIGHT_ZONE_FILE", "PREVIEW_OVERRIDE_FILE", "CONTROL_STATE_FILE")
+    STATE_KEYS = ("LIGHT_ZONE_FILE", "CONTROL_STATE_FILE")
 
     def settings_in(self, text: str) -> set[str]:
         return {

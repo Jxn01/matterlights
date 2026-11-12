@@ -1,7 +1,8 @@
-"""Mirror the dashboard's two master switches to Home Assistant, both ways.
+"""Mirror the two master switches to Home Assistant, both ways.
 
-The dashboard's **Lights** and **RGB** buttons write ``lights_on`` / ``rgb_on``
-into the control-state file. With ``HA_LIGHTS_SWITCH_ENTITY`` and/or
+The **Lights** and **RGB** master switches are ``lights_on`` / ``rgb_on`` in the
+control-state file (the localhost dashboard that used to flip them was retired on
+2026-11-12; Home Assistant is now where they are flipped). With ``HA_LIGHTS_SWITCH_ENTITY`` and/or
 ``HA_RGB_SWITCH_ENTITY`` set, this mirror keeps each one equal to an on/off
 entity in Home Assistant (an ``input_boolean`` helper), so the same switch can
 be flipped from either place.
@@ -97,7 +98,7 @@ class SwitchMirror:
                 elif self._client.set_switch_state(binding.entity_id, current):
                     self._agreed[binding.field] = current
                     self._logger.info(
-                        "%s switched %s from the dashboard; mirrored to %s",
+                        "%s switched %s in the control file; mirrored to %s",
                         _label(binding.field), _word(current), binding.entity_id,
                     )
                 # A failed push leaves `agreed` alone, so the next tick retries.

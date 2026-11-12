@@ -7,9 +7,10 @@ sharing. ``persist_mode=2`` asks the portal for a ``restore_token`` so later run
 skip the dialog, and that token is kept in the XDG state directory.
 
 ⚠️ **A consequence callers must surface rather than hide:** on this path the
-*user* chooses the screen in the dialog, so ``SCREEN_CAPTURE_TARGET`` and the
-dashboard's Capture Screen picker cannot select it. The dashboard says so instead
-of offering a control that silently does nothing.
+*user* chooses the screen in the dialog, so neither ``SCREEN_CAPTURE_TARGET`` nor
+Home Assistant's Screen select can choose it. The select says so (its only option
+becomes ``ha_selects.SCREEN_DIALOG``) instead of offering a control that silently
+does nothing.
 
 THE REQUEST/RESPONSE DANCE. Every portal method returns immediately with a
 Request object path and delivers its real answer later as a ``Response`` signal

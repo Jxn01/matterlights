@@ -3,7 +3,7 @@
 This is the guard for a whole CLASS of bug, not one instance of it. Until
 2026-09-08 ``screen.py`` began with ``from ctypes import windll`` at module
 scope, so importing *anything* that reached it -- ``home_assistant``,
-``playback``, ``main``, ``dashboard`` -- raised ``ImportError`` on Linux. The
+``playback``, ``main``, the old ``dashboard`` -- raised ``ImportError`` on Linux. The
 package was not "mostly portable with a few Windows bits"; it was entirely
 unusable off Windows, and nothing in the build said so.
 

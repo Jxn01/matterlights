@@ -15,8 +15,8 @@ at all -- never by catching an error from here. See R1 in the design doc.
 
 GEOMETRY. Monitor sizes are reported in Mutter's LOGICAL coordinates -- mode size
 divided by scale, axes swapped for a rotated output. Those are stage coordinates,
-which is what ``RecordArea`` takes and what the dashboard needs to draw the
-desktop arrangement correctly. They are deliberately NOT XWayland's numbers,
+which is what ``RecordArea`` takes and what a picture of the desktop arrangement
+needs. They are deliberately NOT XWayland's numbers,
 which report this rig's 3840x2160 primary as 7680x4320.
 """
 

@@ -117,14 +117,21 @@ def capture_average_color(
     )[0]
 
 
+def target_is_user_selected() -> bool:
+    """True when the capture source took its screen from the user (the portal's dialog): then neither
+    ``SCREEN_CAPTURE_TARGET`` nor Home Assistant's Screen select can choose one, and the select says so."""
+
+    return bool(getattr(_backend(), "target_is_user_selected", False))
+
+
 def list_monitors() -> list[dict[str, int | bool | str]]:
     """Describe every attached screen so the UI can offer a real choice.
 
     Index 0 is the virtual bounding box covering all screens (the ``all``
     capture target); indexes 1..N are the physical monitors.
 
-    Plain dicts rather than ``Monitor`` objects because the dashboard and the
-    zone designer serialise this straight to JSON.
+    Plain dicts rather than ``Monitor`` objects: they travel to Home Assistant's
+    Screen select (``ha_selects.screen_choices``) and into logs as they are.
     """
 
     return [monitor.as_dict() for monitor in _backend().list_monitors()]

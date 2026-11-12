@@ -78,20 +78,23 @@ class ControlState:
     # Which screen autonomous mode samples. ``None`` inherits SCREEN_CAPTURE_TARGET
     # from the environment, so an existing control file keeps its old behaviour.
     capture_target: str | None = None
-    # Master power switch from the dashboard. ``False`` keeps every light off,
+    # Master power switch (Home Assistant's Lights switch). ``False`` keeps every light off,
     # regardless of mode, until switched back on; it lives in the control file,
     # so it survives reboots of both the PC and the sync loop.
     lights_on: bool = True
     # Same idea for the optional RGB extension (ambience-rgb), which drives local
     # RGB hardware from the same ambience colours. Kept here rather than in a
     # second control file so there is exactly ONE source of truth that both the
-    # dashboard and the extension read. Defaults true: an existing control file
+    # switch mirror and the extension read. Defaults true: an existing control file
     # written before this field existed should not leave the RGB dark forever.
     rgb_on: bool = True
+    # The colour engine (COLOR_SYNC_MODE) chosen live from Home Assistant -- the lights hub. ``None`` inherits the
+    # environment's value, so an existing control file keeps its behaviour.
+    color_sync_mode: str | None = None
 
 
 def effective_capture_target(state: ControlState, default_target: str) -> str:
-    """Resolve which screen to sample: the dashboard choice, else the env default."""
+    """Resolve which screen to sample: the choice made in Home Assistant, else the env default."""
 
     return state.capture_target or default_target
 
@@ -288,9 +291,10 @@ def load_control_state(path: Path | None) -> ControlState:
 def save_control_state(path: Path, state: ControlState) -> None:
     """Write the control state atomically.
 
-    Two processes write this file -- the dashboard and the sync loop's Home
-    Assistant switch mirror -- and the sync loop reads it whenever its mtime
-    moves. ``write_text`` truncates first, so a reader could catch it empty or
+    Several threads write this file -- the sync loop's Home Assistant mirrors
+    (switches, selects, hub helpers) -- and the sync loop reads it whenever its
+    mtime moves (the localhost dashboard was a second writing process until
+    2026-11-12). ``write_text`` truncates first, so a reader could catch it empty or
     half-written, and ``load_control_state`` reads a broken file as the
     *default* state: autonomous mode, lights on. Writing beside it and renaming
     over it means a reader sees the old file or the new one, never a torn one.
@@ -331,7 +335,7 @@ def update_control_switches(path: Path, values: dict[str, bool]) -> ControlState
     """Set only the master switches, leaving every other field as it is on disk.
 
     The file is read here, at write time, never taken from a copy held earlier:
-    a mode or pattern saved from the dashboard in between would otherwise be
+    a mode or pattern saved from Home Assistant in between would otherwise be
     rolled back by a switch that has nothing to do with it.
     """
 
@@ -344,9 +348,13 @@ def update_control_switches(path: Path, values: dict[str, bool]) -> ControlState
 
 
 _KEEP = object()
+COLOR_SYNC_MODES = ("ambience", "zoned", "shared-variant")
 
 
-def update_control_selection(path: Path, *, mode=_KEEP, custom_type=_KEEP, capture_target=_KEEP) -> ControlState:
+def update_control_selection(
+    path: Path, *, mode=_KEEP, custom_type=_KEEP, capture_target=_KEEP, color_sync_mode=_KEEP,
+    brightness=_KEEP, solid_mode=_KEEP, solid_color=_KEEP, solid_kelvin=_KEEP, pattern_steps=_KEEP,
+) -> ControlState:
     """Set the mode, the custom type and/or the capture screen, leaving every other field as it is on disk.
 
     The lights hub's select mirror (``ha_selects``) writes through this, read at write time like
@@ -366,6 +374,25 @@ def update_control_selection(path: Path, *, mode=_KEEP, custom_type=_KEEP, captu
         state = replace(state, custom=replace(state.custom, type=custom_type))
     if capture_target is not _KEEP:
         state = replace(state, capture_target=_parse_capture_target(capture_target))
+    if color_sync_mode is not _KEEP:
+        if color_sync_mode is not None and color_sync_mode not in COLOR_SYNC_MODES:
+            raise ValueError(f"not a colour engine: {color_sync_mode!r}")
+        state = replace(state, color_sync_mode=color_sync_mode)
+    custom = {}
+    if brightness is not _KEEP:
+        custom["brightness"] = _parse_brightness(brightness)
+    if solid_mode is not _KEEP:
+        custom["solid_mode"] = _parse_color_mode(solid_mode)
+    if solid_color is not _KEEP:
+        custom["solid_color"] = solid_color if isinstance(solid_color, RgbColor) else _parse_color(solid_color)
+    if solid_kelvin is not _KEEP:
+        custom["solid_kelvin"] = _parse_kelvin(solid_kelvin)
+    if pattern_steps is not _KEEP:
+        if len(pattern_steps) > MAX_PATTERN_STEPS:
+            raise ValueError(f"A pattern may contain at most {MAX_PATTERN_STEPS} colors")
+        custom["pattern_steps"] = tuple(pattern_steps)
+    if custom:
+        state = replace(state, custom=replace(state.custom, **custom))
     # Never write a state that would not load back: a "pattern" with no saved steps fails validation, and
     # load_control_state then answers the DEFAULT state -- master switches, screen and all (found 2026-11-12).
     control_state_from_payload(control_state_to_payload(state))
@@ -381,6 +408,7 @@ def control_state_to_payload(state: ControlState) -> dict:
         "captureTarget": state.capture_target,
         "lightsOn": state.lights_on,
         "rgbOn": state.rgb_on,
+        "colorSyncMode": state.color_sync_mode,
         "custom": {
             "type": custom.type,
             "brightness": custom.brightness,
@@ -420,6 +448,11 @@ def control_state_from_payload(payload: dict) -> ControlState:
     )
     lights_on = _parse_lights_on(payload.get("lightsOn", payload.get("lights_on", True)))
     rgb_on = _parse_lights_on(payload.get("rgbOn", payload.get("rgb_on", True)))
+    color_sync_mode = payload.get("colorSyncMode")
+    if color_sync_mode is not None:
+        color_sync_mode = str(color_sync_mode).strip().lower() or None
+        if color_sync_mode is not None and color_sync_mode not in COLOR_SYNC_MODES:
+            raise ValueError(f"colorSyncMode must be one of: {', '.join(COLOR_SYNC_MODES)}")
 
     custom_payload = payload.get("custom") or {}
     if not isinstance(custom_payload, dict):
@@ -452,6 +485,7 @@ def control_state_from_payload(payload: dict) -> ControlState:
         capture_target=capture_target,
         lights_on=lights_on,
         rgb_on=rgb_on,
+        color_sync_mode=color_sync_mode,
         custom=CustomState(
             type=custom_type,
             brightness=brightness,
@@ -544,3 +578,45 @@ def _clamp_channel(value: object) -> int:
     except (TypeError, ValueError) as exc:
         raise ValueError("color channels must be numbers") from exc
     return max(0, min(255, number))
+
+
+# --- the pattern as one line of text (the lights hub's pattern field, 2026-11-12) -------------------------------------
+# A step is a colour (`#ff3300` or `ff3300`) or a white (`2700K`), then the hold and the optional transition in
+# seconds; steps are separated by `,` or `;`. Example: `#ff3300 2 1, 2700K 3 0.5, #0044ff 2`.
+
+def format_pattern(steps: tuple[PatternStep, ...]) -> str:
+    def num(x: float) -> str:
+        return f"{x:g}"
+    parts = []
+    for step in steps:
+        what = f"{step.kelvin}K" if step.mode == COLOR_WHITE else "#{:02x}{:02x}{:02x}".format(*step.color.as_list())
+        parts.append(f"{what} {num(step.hold)}" + (f" {num(step.transition)}" if step.transition else ""))
+    return ", ".join(parts)
+
+
+def parse_pattern(text: str) -> tuple[PatternStep, ...]:
+    """The inverse of ``format_pattern``; raises ``ValueError`` with a message naming the bad step."""
+
+    steps = []
+    for n, chunk in enumerate([c.strip() for c in text.replace(";", ",").split(",") if c.strip()], start=1):
+        words = chunk.split()
+        if len(words) not in (2, 3):
+            raise ValueError(f"step {n} ({chunk!r}): expected a colour or white, a hold and an optional transition")
+        what = words[0].lower()
+        try:
+            hold = _parse_seconds(float(words[1]))
+            transition = _parse_seconds(float(words[2])) if len(words) == 3 else 0.0
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"step {n} ({chunk!r}): {exc}") from None
+        if what.endswith("k") and what[:-1].isdigit():
+            steps.append(PatternStep(RgbColor(255, 255, 255), hold, transition, COLOR_WHITE, _parse_kelvin(int(what[:-1]))))
+            continue
+        hexa = what.lstrip("#")
+        if len(hexa) != 6 or any(c not in "0123456789abcdef" for c in hexa):
+            raise ValueError(f"step {n} ({chunk!r}): {words[0]!r} is neither #rrggbb nor a white like 2700K")
+        steps.append(PatternStep(RgbColor(int(hexa[0:2], 16), int(hexa[2:4], 16), int(hexa[4:6], 16)), hold, transition))
+    if not steps:
+        raise ValueError("a pattern needs at least one step, e.g. #ff3300 2 1, 2700K 3")
+    if len(steps) > MAX_PATTERN_STEPS:
+        raise ValueError(f"a pattern may contain at most {MAX_PATTERN_STEPS} steps")
+    return tuple(steps)

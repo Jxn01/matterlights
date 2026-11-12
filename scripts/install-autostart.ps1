@@ -10,8 +10,8 @@ $pythonw = Join-Path $repoRoot ".venv\Scripts\pythonw.exe"
 $envFile = Join-Path $repoRoot ".env"
 
 # The tasks run pythonw directly, and pythonw has no console to report a
-# failure on -- so the checks start-sync.ps1 and start-dashboard.ps1 make at
-# every start are made here, once, instead.
+# failure on -- so the checks start-sync.ps1 makes at every start are made
+# here, once, instead.
 if (-not (Test-Path $pythonw)) {
     throw "Virtualenv interpreter not found at $pythonw. Create the venv and install the package first."
 }
@@ -33,13 +33,10 @@ $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interact
 # earlier form of this script, powershell -WindowStyle Hidden -File start-*.ps1,
 # put a terminal on the taskbar at every logon. pythonw is a GUI-subsystem
 # binary and never has a console, so there is no window to hide. Startup errors
-# go to the log -- LOG_PATH in .env, or %LOCALAPPDATA%\matterlights\matterlights.log
-# -- and the dashboard's port is DASHBOARD_PORT in .env, since a task cannot
-# pass an environment variable.
+# go to the log -- LOG_PATH in .env, or %LOCALAPPDATA%\matterlights\matterlights.log.
 $syncAction = New-ScheduledTaskAction -Execute $pythonw -Argument "-m matterlights" -WorkingDirectory $repoRoot
-# The localhost dashboard no longer starts at logon (2026-11-12): every daily setting lives in Home Assistant's Lights
-# dashboard (README -> The lights hub). Start it by hand to edit the saved colour, the pattern or zones:
-# scripts\start-dashboard.ps1. An older install's dashboard task is removed here.
+# The localhost dashboard was retired on 2026-11-12: every setting lives in Home Assistant (README -> The lights hub).
+# An older install's dashboard task is removed below.
 
 # -ErrorAction Stop on each: Register-ScheduledTask reports a failure as a
 # non-terminating error, and without it an "Access is denied" scrolls past with
@@ -55,7 +52,7 @@ Register-ScheduledTask `
 
 if (Get-ScheduledTask -TaskName $DashboardTaskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $DashboardTaskName -Confirm:$false -ErrorAction Stop
-    Write-Host "Removed the retired logon task '$DashboardTaskName' (the dashboard now starts by hand only)."
+    Write-Host "Removed the retired logon task '$DashboardTaskName' (every setting lives in Home Assistant now)."
 }
 
 try {

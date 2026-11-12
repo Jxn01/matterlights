@@ -7,10 +7,10 @@ reboot and ends the session doing the testing. Before this file, the only
 evidence the Windows side still worked after the Linux port was that it compiled.
 
 Compiling is a weak claim. The port MOVED these modules -- capture came out of
-``screen.py`` into ``capture/``, service control came out of ``dashboard.py``
-behind a Protocol -- and the risk that creates is at the SEAMS: does the factory
-still hand back the Windows class, does the Protocol still line up, do the JSON
-keys the dashboard's JavaScript reads still come out with the same names.
+``screen.py`` into ``capture/`` -- and the risk that creates is at the SEAMS: does
+the factory still hand back the Windows class, does nothing Linux-only leak in.
+(Service control and the localhost dashboard that used it were retired on
+2026-11-12, when every setting moved into Home Assistant.)
 
 Those seams are all plain Python. They do not need Windows; they need
 ``sys.platform`` to say ``win32`` and two ctypes attributes to exist. So they are
@@ -18,8 +18,7 @@ tested here, on Linux, on every run.
 
 ⚠️ **What this deliberately does NOT test.** The fake answers every Win32 call
 with "1, fine". It cannot tell you that ``CreateWindowExW`` really produces a
-window, that DXGI really produces a frame, or that Task Scheduler really accepts
-a registration. That still requires Windows. What it tells you is that the
+window, or that DXGI really produces a frame. That still requires Windows. What it tells you is that the
 plumbing this port rearranged is connected -- which is exactly the part that
 moved, and exactly the part a compile check cannot see.
 
@@ -41,7 +40,6 @@ import unittest
 _MATTERLIGHTS_PREFIXES = (
     "matterlights.capture",
     "matterlights.display_power",
-    "matterlights.service_control",
     "matterlights.shutdown_hook",
     "matterlights.process_lock",
 )
@@ -113,14 +111,13 @@ def win32_environment():
 
 @unittest.skipIf(sys.platform == "win32", "on Windows the real tests run instead")
 class WindowsModulesImportTest(unittest.TestCase):
-    """Every Windows module must import. Four of them broke during the port."""
+    """Every Windows module must import. Four of them broke during the port (one, service control, retired since)."""
 
-    def test_all_four_windows_modules_import(self) -> None:
+    def test_all_windows_modules_import(self) -> None:
         with win32_environment():
             for name in (
                 "matterlights.capture.windows",
                 "matterlights.display_power.windows",
-                "matterlights.service_control.windows",
                 "matterlights.shutdown_hook.windows",
             ):
                 with self.subTest(module=name):
@@ -172,17 +169,10 @@ class FactoryDispatchTest(unittest.TestCase):
             self.assertEqual(type(backend).__name__, "WindowsCaptureBackend")
             self.assertEqual(type(backend).__module__, "matterlights.capture.windows")
 
-    def test_service_control_is_the_windows_one(self) -> None:
-        with win32_environment():
-            service_control = importlib.import_module("matterlights.service_control")
-            control = service_control.get_service_control()
-            self.assertEqual(type(control).__name__, "WindowsServiceControl")
-
     def test_no_factory_returns_a_linux_implementation(self) -> None:
         with win32_environment():
             capture = importlib.import_module("matterlights.capture")
-            service_control = importlib.import_module("matterlights.service_control")
-            for obj in (capture._create_backend(), service_control.get_service_control()):
+            for obj in (capture._create_backend(),):
                 with self.subTest(obj=type(obj).__name__):
                     self.assertNotIn("linux", type(obj).__module__)
                     self.assertNotIn("Systemd", type(obj).__name__)
@@ -193,51 +183,12 @@ class FactoryDispatchTest(unittest.TestCase):
 
         with win32_environment():
             importlib.import_module("matterlights.capture")._create_backend()
-            importlib.import_module("matterlights.service_control").get_service_control()
             leaked = [
                 name
                 for name in sys.modules
                 if name.startswith("matterlights.") and name.endswith(".linux")
             ]
             self.assertEqual(leaked, [], f"Linux modules imported under win32: {leaked}")
-
-
-@unittest.skipIf(sys.platform == "win32", "on Windows the real tests run instead")
-class DashboardContractTest(unittest.TestCase):
-    """The dashboard's JavaScript reads these key names. They are a contract.
-
-    Service control moved out of ``dashboard.py`` behind a Protocol during the
-    port, and the claim made at the time was that the browser code needed no
-    changes. That claim is only true while ``as_dict()`` keeps emitting the
-    Windows Task Scheduler vocabulary, so it is asserted rather than remembered.
-    """
-
-    def test_status_dict_keeps_the_task_scheduler_key_names(self) -> None:
-        with win32_environment():
-            service_control = importlib.import_module("matterlights.service_control")
-            status = service_control.ServiceStatus(
-                exists=True,
-                name="MatterLights Sync",
-                state="Ready",
-                last_run="2026-09-08",
-                next_run="2026-09-09",
-                last_result="0",
-            )
-            self.assertEqual(
-                set(status.as_dict()),
-                {"exists", "taskName", "state", "lastRunTime", "nextRunTime", "lastTaskResult"},
-            )
-
-    def test_the_dashboard_javascript_reads_exactly_those_keys(self) -> None:
-        """Read the shipped HTML, so renaming a key in either place fails here."""
-
-        from pathlib import Path
-
-        dashboard = Path(__file__).resolve().parents[1] / "src" / "matterlights" / "dashboard.py"
-        text = dashboard.read_text(encoding="utf-8")
-        for key in ("taskName", "lastRunTime", "nextRunTime", "lastTaskResult"):
-            with self.subTest(key=key):
-                self.assertIn(key, text, f"dashboard no longer reads {key}")
 
 
 @unittest.skipIf(sys.platform == "win32", "on Windows the real tests run instead")

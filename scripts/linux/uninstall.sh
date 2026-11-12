@@ -7,6 +7,7 @@ set -euo pipefail
 USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 echo "Stopping and removing the user units"
+# (the dashboard and zone-designer units belong to the localhost pages retired on 2026-11-12; an older install's go too)
 systemctl --user disable --now matterlights-sync.service matterlights-dashboard.service 2>/dev/null || true
 systemctl --user stop matterlights-zone-ui.service 2>/dev/null || true
 rm -f "$USER_UNIT_DIR/matterlights-sync.service" "$USER_UNIT_DIR/matterlights-dashboard.service"

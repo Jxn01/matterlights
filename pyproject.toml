@@ -11,7 +11,6 @@ requires-python = ">=3.11"
 license = {file = "LICENSE"}
 keywords = [
     "ambilight",
-    "flask",
     "home-assistant",
     "matter",
     "pipewire",
@@ -49,16 +48,13 @@ dependencies = [
     # force a fragile source build. scripts/linux/install.sh checks for them and
     # names the packages if they are missing. See capture/linux.py.
     "dxcam>=0.3.0; sys_platform == 'win32'",
-    "flask>=3.1.0",
     "mss>=10.1.0",
     "requests>=2.32.0",
 ]
 
 [project.scripts]
-matterlights-sync = "matterlights.main:main"
+matterlights-sync = "matterlights.main:run"
 matterlights-discover = "matterlights.discover:main"
-matterlights-zones = "matterlights.zone_ui:main"
-matterlights-dashboard = "matterlights.dashboard:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -68,11 +68,26 @@ class PortalRequestPathTest(unittest.TestCase):
 
 class PortalAsymmetryTest(unittest.TestCase):
     def test_portal_declares_that_the_user_picks_the_screen(self) -> None:
-        """So the dashboard can say so rather than offer a dead control."""
+        """So Home Assistant's Screen select can say so rather than offer a dead control."""
 
         from matterlights.capture.portal import PortalSource
 
         self.assertTrue(PortalSource.target_is_user_selected)
+
+    def test_the_linux_backend_passes_its_sources_answer_on(self) -> None:
+        """screen.target_is_user_selected() asks the backend; the backend must ask its source."""
+
+        from matterlights.capture.linux import LinuxCaptureBackend
+
+        class Source:
+            def __init__(self, picked: bool) -> None:
+                self.target_is_user_selected = picked
+
+            def set_invalidation_callback(self, _callback) -> None:
+                pass
+
+        self.assertTrue(LinuxCaptureBackend(source=Source(True)).target_is_user_selected)
+        self.assertFalse(LinuxCaptureBackend(source=Source(False)).target_is_user_selected)
 
     def test_mutter_does_not_claim_that(self) -> None:
         from matterlights.capture.mutter import MutterSource

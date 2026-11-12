@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import colorsys
 from dataclasses import dataclass
+import collections
 import logging
 import sys
+import threading
 import time
 
 from matterlights.sync_mark import leave_mark
@@ -17,6 +19,7 @@ from matterlights.ambience import (
 from matterlights import capture as _capture
 from matterlights.config import load_settings
 from matterlights.display_power import start_display_monitor
+from matterlights.ha_hub import ENGINE_LABELS, start_hub_mirror
 from matterlights.ha_selects import mode_label, start_select_mirror
 from matterlights.ha_switches import start_switch_mirror
 from matterlights.home_assistant import HomeAssistantClient, LightUpdate
@@ -26,7 +29,6 @@ from matterlights.owner import start_owner_gate
 from matterlights.playback import MODE_CUSTOM, CustomPlayer, effective_capture_target, load_control_state
 from matterlights.process_lock import acquire_sync_singleton
 from matterlights.shutdown_hook import start_shutdown_hook
-from matterlights.preview import load_preview_overrides
 from matterlights.screen import (
     RgbColor,
     ScreenZone,
@@ -34,6 +36,7 @@ from matterlights.screen import (
     capture_raw_with_session,
     capture_session,
     list_monitors,
+    target_is_user_selected,
     load_configured_light_zones,
     sample_zone_samples_from_screenshot,
 )
@@ -43,12 +46,54 @@ LOGGER = logging.getLogger("matterlights")
 FULL_SCREEN_ZONE = ScreenZone("full", 0.0, 0.0, 1.0, 1.0)
 
 
+#: main() returns this when Home Assistant asked for a restart; ``__main__`` then re-executes the process.
+RESTART_EXIT_CODE = 75
+
+
+def run() -> None:
+    """``python -m matterlights`` and the ``matterlights-sync`` script: main(), then a restart if HA asked (the lights
+    hub's restart button). main() has already released the single-instance lock, so the new copy can take it.
+
+    * POSIX: ``os.execv`` replaces the process image -- the same PID, which systemd keeps watching.
+    * Windows has no exec: the CRT's ``execv`` spawns a child with its arguments UNQUOTED (a path with a space splits)
+      and exits. So a fresh copy is started with ``subprocess`` (which quotes) and this one exits 0; Task Scheduler then
+      shows its task finished while the loop runs on (stop it with a logoff or ``Stop-Process``).
+    """
+
+    code = main()
+    if code == RESTART_EXIT_CODE:
+        argv = [sys.executable, "-m", "matterlights", *sys.argv[1:]]
+        if sys.platform == "win32":
+            import subprocess
+            subprocess.Popen(argv, close_fds=True)
+            raise SystemExit(0)
+        import os
+        os.execv(sys.executable, argv)
+    raise SystemExit(code)
+
+
+class _RecentProblems(logging.Handler):
+    """The last few warnings and errors, for the status sensor's ``recent_problems`` (what the retired localhost
+    dashboard's log tail showed, now in Home Assistant)."""
+
+    def __init__(self, keep: int = 8) -> None:
+        super().__init__(level=logging.WARNING)
+        self.lines: collections.deque[str] = collections.deque(maxlen=keep)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.lines.append(f"{time.strftime('%H:%M', time.localtime(record.created))} {record.getMessage()[:160]}")
+        except Exception:  # noqa: BLE001 -- a status line must never break logging
+            pass
+
+
 def _hub_status(owner_gate, owned: bool, control_state, display_on: bool, settings) -> tuple[str, dict]:
     """What the loop is doing, for the lights hub's status sensor (``HA_STATUS_ENTITY``), with attributes."""
 
     attributes = {
         "mode": mode_label(control_state),
         "screen": effective_capture_target(control_state, settings.screen_capture_target),
+        "engine": ENGINE_LABELS.get(control_state.color_sync_mode or settings.color_sync_mode, settings.color_sync_mode),
         "os": "Linux" if sys.platform.startswith("linux") else "Windows",
     }
     if owner_gate is not None and owner_gate.manual():
@@ -250,7 +295,7 @@ def main() -> int:
     # Home Assistant writes run here, never on the capture loop: see light_worker.
     light_worker = LightWorker(client, LOGGER)
     off_guard = OffGuard(light_worker)
-    # The dashboard's Lights/RGB switches, mirrored to Home Assistant helpers on
+    # The Lights/RGB master switches, mirrored to Home Assistant helpers on
     # a thread of their own. None unless HA_*_SWITCH_ENTITY is set.
     switch_mirror = start_switch_mirror(settings, client, LOGGER)
     # The lights hub's mode / screen selects and status sensor (ha_selects). None unless HA_MODE_ENTITY,
@@ -258,6 +303,12 @@ def main() -> int:
     select_watch = start_select_mirror(settings, client, LOGGER)
     select_mirror = select_watch[0] if select_watch is not None else None
     next_monitor_offer = 0.0
+    # Every other setting the localhost pages held (ha_hub): saved colour, pattern, engine, zones, restart.
+    restart_requested = threading.Event()
+    hub_watch = start_hub_mirror(settings, client, restart_requested.set, LOGGER)
+    hub_mirror = hub_watch[0] if hub_watch is not None else None
+    recent_problems = _RecentProblems()
+    logging.getLogger("matterlights").addHandler(recent_problems)
 
     def reset_runtime_caches() -> None:
         last_colors.clear()
@@ -290,10 +341,13 @@ def main() -> int:
         with capture_session() as screen_capture_session:
             while True:
                 iteration_started = time.monotonic()
+                if restart_requested.is_set():
+                    LOGGER.info("Restarting at Home Assistant's request")
+                    return RESTART_EXIT_CODE
                 if select_mirror is not None and settings.ha_screen_entity and iteration_started >= next_monitor_offer:
                     # On this thread: Windows' capture library may not be called from the mirror's.
                     try:
-                        select_mirror.offer_monitors(list_monitors())
+                        select_mirror.offer_monitors(list_monitors(), user_selected=target_is_user_selected())
                     except Exception:  # noqa: BLE001 -- a screen list is a convenience, never a reason to stop
                         LOGGER.debug("Could not list the monitors for Home Assistant", exc_info=True)
                     next_monitor_offer = iteration_started + 60.0
@@ -378,13 +432,19 @@ def main() -> int:
                     if master_off_active and control_state.lights_on:
                         master_off_active = False
                         reset_runtime_caches()
-                        LOGGER.info("Lights switched on (dashboard or Home Assistant); resuming")
+                        LOGGER.info("Lights switched on (Home Assistant or the control file); resuming")
 
                     ordered_available = [
                         entity_id for entity_id in settings.light_entities if entity_id in available_entity_ids
                     ]
                     if select_mirror is not None:
-                        select_mirror.set_status(*_hub_status(owner_gate, owned, control_state, display_on, settings))
+                        status, attributes = _hub_status(owner_gate, owned, control_state, display_on, settings)
+                        attributes["lights_available"] = len(ordered_available)
+                        attributes["lights_unavailable"] = sorted(set(settings.light_entities) - set(ordered_available))
+                        attributes["recent_problems"] = list(recent_problems.lines)
+                        if hub_mirror is not None:
+                            attributes["setting_problems"] = hub_mirror.problems()
+                        select_mirror.set_status(status, attributes)
 
                     if not owned or not control_state.lights_on:
                         if not owned:
@@ -405,7 +465,7 @@ def main() -> int:
                                 master_off_confirmed.clear()
                                 reset_runtime_caches()
                                 off_guard.entered()
-                                LOGGER.info("Lights switched off (dashboard or Home Assistant)")
+                                LOGGER.info("Lights switched off (Home Assistant or the control file)")
                             if off_guard.resweep_due():
                                 master_off_confirmed.clear()
                                 just_entered = True
@@ -503,7 +563,9 @@ def main() -> int:
                         # palette. Assigning it only in that branch leaves the
                         # name unbound for every other colour_sync_mode.
                         ambience_frame = None
-                        if settings.color_sync_mode == "ambience":
+                        # live: Home Assistant's colour engine select (ha_hub) overrides COLOR_SYNC_MODE
+                        engine = control_state.color_sync_mode or settings.color_sync_mode
+                        if engine == "ambience":
                             zone_samples, ambience_frame = build_ambience(
                                 frame_raw,
                                 frame_width,
@@ -521,10 +583,10 @@ def main() -> int:
                                 frame_height,
                                 settings.sample_stride,
                                 settings.color_boost,
-                                _capture_zones_for_mode(settings.color_sync_mode, light_zones),
+                                _capture_zones_for_mode(engine, light_zones),
                             )
                             zone_samples = _build_effective_zone_samples(
-                                settings.color_sync_mode,
+                                engine,
                                 light_zones,
                                 captured_zone_samples,
                                 settings.primary_light_zone_names,
@@ -586,12 +648,10 @@ def main() -> int:
                             continue
                         last_light_update = now
 
-                        preview_overrides = load_preview_overrides(settings.preview_override_file)
                         desired_states = _build_desired_states(
                             settings.light_entities,
                             zone_samples,
                             available_entity_ids,
-                            preview_overrides,
                             retry_entity_ids,
                             last_colors,
                             off_entity_ids,
@@ -699,6 +759,9 @@ def main() -> int:
             switch_mirror.stop()
         if select_watch is not None:
             select_watch[1].stop()
+        if hub_watch is not None:
+            hub_watch[1].stop()
+        logging.getLogger("matterlights").removeHandler(recent_problems)
         if owner_watch is not None:
             owner_watch[1].stop()
         if display_monitor is not None:
@@ -1042,7 +1105,6 @@ def _build_desired_states(
     entity_ids: list[str],
     zone_samples: list[ZoneSample],
     available_entity_ids: set[str],
-    preview_overrides,
     retry_entity_ids: set[str],
     last_colors: dict[str, RgbColor],
     off_entity_ids: set[str],
@@ -1056,31 +1118,7 @@ def _build_desired_states(
         if entity_id not in available_entity_ids:
             continue
 
-        preview_override = preview_overrides.get(entity_id)
         last_color = last_colors.get(entity_id)
-        if preview_override is not None:
-            preview_color = preview_override.color
-            should_send_preview = (
-                entity_id in retry_entity_ids
-                or entity_id in off_entity_ids
-                or last_color is None
-                or last_color.distance(preview_color) > 0
-            )
-            if should_send_preview:
-                desired_states.append(
-                    ZonedLightState(
-                        entity_id=entity_id,
-                        zone=sample.zone,
-                        sample=sample,
-                        update=LightUpdate(
-                            entity_id=entity_id,
-                            color=preview_color,
-                            brightness=preview_override.brightness,
-                        ),
-                    )
-                )
-            continue
-
         sampled_color = sample.color
         should_turn_off = sample.should_turn_off(dark_threshold, dark_active_ratio_threshold)
         should_send_update = (

@@ -16,12 +16,11 @@ class Settings:
     light_entities: list[str]
     light_zone_layout: list[str] = field(default_factory=list)
     light_zone_file: Path | None = None
-    preview_override_file: Path | None = None
     control_state_file: Path | None = None
     respect_display_sleep: bool = True
     turn_off_on_shutdown: bool = True
     # Optional local RGB extension (ambience-rgb). When disabled -- the default --
-    # nothing is published, the dashboard hides its RGB control entirely, and
+    # nothing is published, no socket is opened, and
     # this program behaves exactly as it did before the extension existed.
     rgb_extension_enabled: bool = False
     # A unix socket path on Linux; udp://127.0.0.1:PORT on Windows, which has no
@@ -32,7 +31,7 @@ class Settings:
     # Windows never reports -- crash, hard reset, power cut. Empty disables it.
     heartbeat_entity_id: str = "sensor.matterlights_heartbeat"
     heartbeat_interval_seconds: float = 30.0
-    # Home Assistant mirrors of the dashboard's Lights and RGB switches (see
+    # Home Assistant mirrors of the control file's Lights and RGB switches (see
     # matterlights.ha_switches). Empty -- the default -- mirrors nothing.
     ha_lights_switch_entity: str = ""
     ha_rgb_switch_entity: str = ""
@@ -45,6 +44,7 @@ class Settings:
     ha_mode_entity: str = ""
     ha_screen_entity: str = ""
     ha_status_entity: str = ""
+    ha_hub_prefix: str = ""
     capture_source: str = "screen"
     tv_frame_bind: str = "0.0.0.0"
     tv_frame_port: int = 8792
@@ -52,8 +52,6 @@ class Settings:
     color_sync_mode: str = "zoned"
     primary_light_zone_names: list[str] = field(default_factory=list)
     ambience_near_lights: list[str] = field(default_factory=list)
-    zone_ui_port: int = 8765
-    dashboard_port: int = 8770
     screen_capture_target: str = "primary"
     request_timeout_seconds: float = 3.0
     # Session end gets one attempt and no retry, so it waits longer than the
@@ -145,10 +143,6 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
             get_value("LIGHT_ZONE_FILE", str(_default_zone_file_path(path_base_dir))),
             path_base_dir,
         ),
-        preview_override_file=_parse_optional_path(
-            get_value("PREVIEW_OVERRIDE_FILE", str(_default_preview_override_file_path(path_base_dir))),
-            path_base_dir,
-        ),
         control_state_file=_parse_optional_path(
             get_value("CONTROL_STATE_FILE", str(_default_control_state_file_path(path_base_dir))),
             path_base_dir,
@@ -168,6 +162,7 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
         ha_mode_entity=get_value("HA_MODE_ENTITY", "").strip(),
         ha_screen_entity=get_value("HA_SCREEN_ENTITY", "").strip(),
         ha_status_entity=get_value("HA_STATUS_ENTITY", "").strip(),
+        ha_hub_prefix=get_value("HA_HUB_PREFIX", "").strip(),
         capture_source=get_value("CAPTURE_SOURCE", "screen").strip().lower(),
         tv_frame_bind=get_value("TV_FRAME_BIND", "0.0.0.0").strip(),
         tv_frame_port=int(get_value("TV_FRAME_PORT", "8792")),
@@ -177,8 +172,6 @@ def load_settings(*, require_light_entities: bool = True) -> Settings:
             get_value("PRIMARY_LIGHT_ZONE_NAMES", "top-center,bottom-left")
         ),
         ambience_near_lights=_parse_light_zone_layout(get_value("AMBIENCE_NEAR_LIGHTS", "")),
-        zone_ui_port=int(get_value("ZONE_UI_PORT", "8765")),
-        dashboard_port=int(get_value("DASHBOARD_PORT", "8770")),
         screen_capture_target=get_value("SCREEN_CAPTURE_TARGET", "primary"),
         request_timeout_seconds=float(get_value("REQUEST_TIMEOUT_SECONDS", "3.0")),
         session_end_timeout_seconds=float(get_value("SESSION_END_TIMEOUT_SECONDS", "10.0")),
@@ -248,7 +241,7 @@ def _default_log_path(base_dir: Path | None = None) -> Path:
 def _default_state_file_path(kind: str, base_dir: Path | None, platform: str | None = None) -> Path:
     """``.matterlights-<kind>.<os>.json`` beside ``.env`` -- one per OS.
 
-    Zones describe the screen layout and the control and preview files are live
+    Zones describe the screen layout and the control file is live
     state, so none of them may be shared between two OSes using one checkout:
     a Windows zone layout is meaningless on Linux, and the other way round.
 
@@ -278,9 +271,6 @@ def _exists(path: Path) -> bool:
 def _default_zone_file_path(base_dir: Path | None = None) -> Path:
     return _default_state_file_path("zones", base_dir)
 
-
-def _default_preview_override_file_path(base_dir: Path | None = None) -> Path:
-    return _default_state_file_path("preview", base_dir)
 
 
 def _default_control_state_file_path(base_dir: Path | None = None) -> Path:
@@ -369,10 +359,6 @@ def _validate_settings(settings: Settings) -> None:
                 raise ValueError
         except ValueError as exc:
             raise ValueError("SCREEN_CAPTURE_TARGET must be 'primary', 'all', or a monitor index starting at 1") from exc
-    if not 1 <= settings.zone_ui_port <= 65535:
-        raise ValueError("ZONE_UI_PORT must be between 1 and 65535")
-    if not 1 <= settings.dashboard_port <= 65535:
-        raise ValueError("DASHBOARD_PORT must be between 1 and 65535")
     if settings.request_timeout_seconds <= 0:
         raise ValueError("REQUEST_TIMEOUT_SECONDS must be greater than 0")
     for name, entity_id in (
@@ -386,6 +372,8 @@ def _validate_settings(settings: Settings) -> None:
     ):
         if entity_id and "." not in entity_id:
             raise ValueError(f"{name} must be an entity ID such as input_boolean.example, got {entity_id!r}")
+    if settings.ha_hub_prefix and not all(c.isalnum() or c == "_" for c in settings.ha_hub_prefix):
+        raise ValueError(f"HA_HUB_PREFIX must be letters, digits and underscores (an entity id part), got {settings.ha_hub_prefix!r}")
     if settings.ha_switch_poll_seconds <= 0:
         raise ValueError("HA_SWITCH_POLL_SECONDS must be greater than 0")
     if bool(settings.ha_owner_entity) != bool(settings.ha_owner_value):

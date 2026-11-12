@@ -1,8 +1,8 @@
 """The lights hub (2026-11-12): the mode and the screen as Home Assistant selects, and a status sensor.
 
 Together with the two master switches (``ha_switches``) and manual control (``owner``), this is what lets one Home
-Assistant dashboard (``lights.jxn.hu``) hold every setting the localhost dashboard used to: the owner asked for every
-light setting in one place and the localhost pages retired.
+Assistant dashboard (``lights.jxn.hu``) hold every setting the localhost pages used to (the rest is ``ha_hub``): the
+owner asked for every light setting in one place, and the localhost pages are gone.
 
 * **Mode** (``HA_MODE_ENTITY``, an ``input_select`` with exactly the options in ``MODE_OPTIONS``): follow the screen,
   or play the colour / pattern saved in the control file. Mirrored both ways like a switch: the helper is shared by
@@ -55,6 +55,8 @@ MODE_OPTIONS: dict[str, tuple[str, str | None]] = {
 }
 SCREEN_PRIMARY = "Primary screen"
 SCREEN_ALL = "All screens"
+#: the only option on the portal path, where the user picked the screen in the screen-sharing dialog
+SCREEN_DIALOG = "Picked in the screen-sharing dialog"
 STATUS_REFRESH_SECONDS = 600.0
 
 
@@ -118,6 +120,7 @@ class SelectMirror:
         self._agreed_mode: str | None = None
         self._agreed_screen: str | None = None       # a capture target ("primary", "all", "2")
         self._monitors: list[dict] | None = None     # offered by the capture loop
+        self._user_selected = False                  # the portal path: the user picked the screen, not a setting
         self._options_sent: list[str] | None = None
         self._status: tuple[str, dict] | None = None
         self._status_sent: tuple[str, dict] | None = None
@@ -125,9 +128,10 @@ class SelectMirror:
         self._without_reading: set[str] = set()
 
     # -- fed from the capture loop -------------------------------------------------------------------------------
-    def offer_monitors(self, monitors: list[dict]) -> None:
+    def offer_monitors(self, monitors: list[dict], user_selected: bool = False) -> None:
         with self._lock:
             self._monitors = list(monitors)
+            self._user_selected = user_selected
 
     def set_status(self, status: str, attributes: dict | None = None) -> None:
         with self._lock:
@@ -201,8 +205,14 @@ class SelectMirror:
     def _tick_screen(self) -> None:
         with self._lock:
             monitors = self._monitors
+            user_selected = self._user_selected
         if monitors is None:
             return                                       # nothing offered yet: do not guess this machine's screens
+        if user_selected:                                # no setting can choose: say so rather than offer a dead control
+            if self._options_sent != [SCREEN_DIALOG] and self._client.set_select_options(self._screen_entity, [SCREEN_DIALOG]):
+                self._options_sent = [SCREEN_DIALOG]
+                self._agreed_screen = None
+            return
         choices = screen_choices(monitors)
         labels = [label for label, _ in choices]
         by_label = dict(choices)

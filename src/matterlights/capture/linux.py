@@ -162,6 +162,12 @@ class LinuxCaptureBackend:
     def list_monitors(self) -> list[Monitor]:
         return self._source.list_monitors()
 
+    @property
+    def target_is_user_selected(self) -> bool:
+        """True on the portal path: the user picked the screen in its dialog, so no setting can choose one."""
+
+        return bool(getattr(self._source, "target_is_user_selected", False))
+
     def grab_png(self, capture_target: str, max_width: int | None = None) -> tuple[bytes, int, int]:
         raw, width, height = self.grab(capture_target)
         rgb = bgrx_to_rgb(raw, width, height)

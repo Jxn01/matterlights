@@ -8,7 +8,7 @@ IDE indexer) launches a real screen-capture daemon and starts driving the lights
 guard costs nothing at run time.
 """
 
-from matterlights.main import main
+from matterlights.main import run
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run()
