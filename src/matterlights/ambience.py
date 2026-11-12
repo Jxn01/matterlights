@@ -158,7 +158,7 @@ def build_ambience(
     that can render a gradient do so without sampling the screen a second time.
     """
 
-    frame = sample_frame(raw, width, height, sample_stride)
+    frame = _sample_frame_cached(raw, width, height, sample_stride)
 
     near_set = set(near_entity_ids)
     near_group = [entity_id for entity_id in entity_ids if entity_id in near_set]
@@ -253,6 +253,43 @@ def render_for_leds(
     )
 
 
+# The last frame sampled and what it gave: (raw, width, height, sample_stride, AmbienceFrame).
+_LAST_SAMPLE: tuple | None = None
+
+
+def _sample_frame_cached(raw: bytes, width: int, height: int, sample_stride: int) -> AmbienceFrame:
+    """``sample_frame``, skipped when the sync loop hands back the frame it sampled last tick.
+
+    Both capture backends are damage-driven: while nothing on screen changes they
+    return the *same* ``bytes`` object on every tick (``CaptureBackend.grab``),
+    and the loop used to histogram it twenty times a second regardless -- about
+    15 % of a core at 4K for a still desktop (measured 2026-11-12).
+
+    Identity, not equality, is the key, and only for ``bytes``: an immutable
+    object that is the same object holds the same pixels, so this is exact and
+    costs nothing. A mutable buffer (the GDI fallback on Windows returns a fresh
+    ``bytearray``) never hits, so a backend that refilled one buffer in place
+    could never freeze the lights. ``AmbienceFrame`` is frozen, so sharing the
+    result is safe. The reference pins at most one frame, which the capture
+    backend is already holding anyway.
+    """
+
+    global _LAST_SAMPLE
+    last = _LAST_SAMPLE
+    if (
+        last is not None
+        and last[0] is raw
+        and type(raw) is bytes
+        and last[1] == width
+        and last[2] == height
+        and last[3] == sample_stride
+    ):
+        return last[4]
+    frame = sample_frame(raw, width, height, sample_stride)
+    _LAST_SAMPLE = (raw, width, height, sample_stride, frame)
+    return frame
+
+
 def sample_frame(raw: bytes, width: int, height: int, sample_stride: int) -> AmbienceFrame:
     """Distill one frame into a weighted palette plus global brightness stats.
 
@@ -288,45 +325,65 @@ def _histogram_numpy(raw: bytes, width: int, height: int, sample_step: int):
     if len(raw) < needed:
         return None
     frame = np.frombuffer(raw, dtype=np.uint8, count=needed).reshape(height, width, 4)
-    sub = frame[::sample_step, ::sample_step, :3].astype(np.int32)
-    blue = sub[..., 0].ravel()
-    green = sub[..., 1].ravel()
-    red = sub[..., 2].ravel()
+    grid = frame[::sample_step, ::sample_step]
+    # One strided gather per channel straight into a contiguous array, so ravel()
+    # is a view rather than a second copy.
+    blue = grid[..., 0].astype(np.int32).ravel()
+    green = grid[..., 1].astype(np.int32).ravel()
+    red = grid[..., 2].astype(np.int32).ravel()
     if red.size == 0:
         return _Histogram([], 0, 0, 0, 0, 0, 0)
 
     luma = (54 * red + 183 * green + 19 * blue) >> 8
-    active = (
-        (red >= _ACTIVE_CHANNEL_THRESHOLD)
-        | (green >= _ACTIVE_CHANNEL_THRESHOLD)
-        | (blue >= _ACTIVE_CHANNEL_THRESHOLD)
-    )
+    active = np.maximum(np.maximum(red, green), blue) >= _ACTIVE_CHANNEL_THRESHOLD
     keys = ((red >> _BIN_SHIFT) << 6) | ((green >> _BIN_SHIFT) << 3) | (blue >> _BIN_SHIFT)
-    size = 1 << 9
-    counts = np.bincount(keys, minlength=size)
-    red_sums = np.bincount(keys, weights=red, minlength=size)
-    green_sums = np.bincount(keys, weights=green, minlength=size)
-    blue_sums = np.bincount(keys, weights=blue, minlength=size)
-    filled = np.nonzero(counts)[0]
 
-    bins = [
-        (
-            int(counts[key]),
-            int(red_sums[key]),
-            int(green_sums[key]),
-            int(blue_sums[key]),
-        )
-        for key in filled
-    ]
+    # 🚨 Lanes: a real screen is mostly one dark colour, so nearly every sample
+    # lands in ONE bin, and bincount's `out[key] += w` then waits on the previous
+    # add to that same slot, sample after sample. Spreading each bin over
+    # _HISTOGRAM_LANES slots by sample position breaks that chain; the lanes are
+    # summed back afterwards. Integer-valued float64 sums are exact far below
+    # 2**53, so the result is unchanged. 4.6 -> 2.4 ms on a real 4K frame at
+    # step 5, no difference on noise (measured 2026-11-12).
+    size = 1 << 9
+    laned = (keys << _HISTOGRAM_LANE_BITS) | _lane_index(np, red.size)
+    laned_size = size << _HISTOGRAM_LANE_BITS
+
+    def per_bin(weights=None):
+        return np.bincount(laned, weights=weights, minlength=laned_size).reshape(size, -1).sum(axis=1)
+
+    counts = per_bin()
+    filled = np.nonzero(counts)[0]
+    red_sums, green_sums, blue_sums = (
+        per_bin(channel)[filled].astype(np.int64).tolist() for channel in (red, green, blue)
+    )
+    # .tolist() converts in C; indexing numpy scalars one by one was ~2,000
+    # int() calls a frame.
+    bins = list(zip(counts[filled].tolist(), red_sums, green_sums, blue_sums))
     return _Histogram(
         bins,
         int(luma.sum()),
         int(np.count_nonzero(active)),
         int(red.size),
-        int(red.sum()),
-        int(green.sum()),
-        int(blue.sum()),
+        sum(red_sums),
+        sum(green_sums),
+        sum(blue_sums),
     )
+
+
+_HISTOGRAM_LANE_BITS = 3  # 8 lanes; 16 measured no better
+_LANE_INDEX: dict[int, object] = {}
+
+
+def _lane_index(np, count: int):
+    """``[0, 1, ..., 7, 0, 1, ...]`` of length ``count``, built once per frame size."""
+
+    lanes = _LANE_INDEX.get(count)
+    if lanes is None:
+        lanes = np.arange(count, dtype=np.int32) & ((1 << _HISTOGRAM_LANE_BITS) - 1)
+        _LANE_INDEX.clear()  # only the current frame size is ever needed
+        _LANE_INDEX[count] = lanes
+    return lanes
 
 
 def _histogram_python(raw: bytes, width: int, height: int, sample_step: int):

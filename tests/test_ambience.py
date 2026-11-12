@@ -351,3 +351,87 @@ class HistogramEquivalenceTest(unittest.TestCase):
         from matterlights.ambience import _histogram_numpy
 
         self.assertIsNone(_histogram_numpy(b"\x00" * 16, 64, 64, 1))
+
+    def test_mostly_one_bin_with_a_ragged_sample_count(self) -> None:
+        """The case the laned bincount exists for (nearly every sample in ONE bin),
+        with sample counts that are not a multiple of the lane count."""
+
+        def colour(x, y):
+            if (x * 7 + y * 3) % 41 == 0:
+                return ((x * 37) % 256, (y * 53) % 256, 255)
+            return (12, 12, 14)
+
+        rows = [[colour(x, y) for x in range(37)] for y in range(23)]
+        raw = self._frame(rows, 37, 23)
+        for step in (1, 2, 3, 5):
+            with self.subTest(step=step):
+                self._assert_same(raw, 37, 23, step)
+
+
+class RepeatedFrameTests(unittest.TestCase):
+    """The sync loop gets the SAME bytes object back while the screen is still;
+    build_ambience must then reuse the last result instead of re-histogramming."""
+
+    def setUp(self) -> None:
+        from matterlights import ambience
+
+        self.ambience = ambience
+        ambience._LAST_SAMPLE = None
+        self.addCleanup(setattr, ambience, "_LAST_SAMPLE", None)
+        self.raw = make_raw(32, 32, lambda x, y: WARM if x < 16 else COOL)
+
+    def _count_calls(self):
+        from unittest import mock
+
+        patcher = mock.patch.object(self.ambience, "sample_frame", wraps=self.ambience.sample_frame)
+        spy = patcher.start()
+        self.addCleanup(patcher.stop)
+        return spy
+
+    def test_the_same_object_is_sampled_once(self) -> None:
+        spy = self._count_calls()
+        first = self.ambience._sample_frame_cached(self.raw, 32, 32, 1)
+        second = self.ambience._sample_frame_cached(self.raw, 32, 32, 1)
+        self.assertEqual(spy.call_count, 1)
+        self.assertIs(first, second)
+
+    def test_an_equal_but_distinct_object_is_sampled_again(self) -> None:
+        spy = self._count_calls()
+        copy = bytes(bytearray(self.raw))
+        self.assertIsNot(copy, self.raw)
+        first = self.ambience._sample_frame_cached(self.raw, 32, 32, 1)
+        second = self.ambience._sample_frame_cached(copy, 32, 32, 1)
+        self.assertEqual(spy.call_count, 2)
+        self.assertEqual(first, second)
+
+    def test_a_new_frame_with_new_pixels_gives_a_new_result(self) -> None:
+        other = make_raw(32, 32, lambda x, y: COOL)
+        first = self.ambience._sample_frame_cached(self.raw, 32, 32, 1)
+        second = self.ambience._sample_frame_cached(other, 32, 32, 1)
+        self.assertNotEqual(first, second)
+        self.assertEqual(second, sample_frame(other, 32, 32, 1))
+
+    def test_changed_geometry_or_stride_recomputes(self) -> None:
+        spy = self._count_calls()
+        self.ambience._sample_frame_cached(self.raw, 32, 32, 1)
+        self.ambience._sample_frame_cached(self.raw, 32, 32, 4)
+        self.ambience._sample_frame_cached(self.raw, 16, 64, 4)
+        self.ambience._sample_frame_cached(self.raw, 16, 32, 4)
+        self.assertEqual(spy.call_count, 4)
+
+    def test_a_mutable_buffer_never_hits(self) -> None:
+        """A backend that refilled one bytearray in place must not freeze the lights."""
+
+        spy = self._count_calls()
+        buffer = bytearray(self.raw)
+        first = self.ambience._sample_frame_cached(buffer, 32, 32, 1)
+        buffer[:] = make_raw(32, 32, lambda x, y: COOL)
+        second = self.ambience._sample_frame_cached(buffer, 32, 32, 1)
+        self.assertEqual(spy.call_count, 2)
+        self.assertNotEqual(first, second)
+
+    def test_build_ambience_goes_through_the_cache(self) -> None:
+        spy = self._count_calls()
+        for _ in range(3):
+            self.ambience.build_ambience(self.raw, 32, 32, 1, 1.0, ["light.a", "light.b"], [], {})
+        self.assertEqual(spy.call_count, 1)

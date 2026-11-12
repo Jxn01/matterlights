@@ -731,6 +731,26 @@ A guard test asserts the two paths produce identical histograms, palettes and
 mixes — otherwise the same screen would light differently depending on whether
 numpy happened to be installed.
 
+**Two further cuts (2026-11-12), both exact. Output was compared byte-for-byte
+against the previous implementation on real, noise and all-black 4K frames:**
+
+- **A still screen costs nothing.** Both capture backends return the *same*
+  `bytes` object on every tick while nothing on screen changes. The loop used to
+  histogram it twenty times a second anyway, about 15 % of a core at 4K.
+  `ambience._sample_frame_cached` returns the previous result when the very same
+  object comes back (about 4 µs). It keys on identity and only for immutable
+  `bytes`, so a backend that refilled one mutable buffer in place could never
+  freeze the lights. The Windows GDI fallback returns a fresh `bytearray` and
+  simply never hits. Anything on screen that animates (a terminal spinner, a
+  video) still produces new frames and is sampled as before.
+- **Laned bincount.** A real screen is mostly one dark colour, so nearly every
+  sample falls into one histogram bin. `np.bincount`'s `out[key] += w` then waits
+  on the previous add to that same slot, sample after sample. Each bin is spread
+  over 8 slots by sample position (`_HISTOGRAM_LANE_BITS`), and the slots are
+  summed back afterwards. Integer-valued float sums are exact, so the histogram is
+  unchanged. At stride 25 on a real 4K frame `sample_frame` went from **6.6 ms to
+  3.6 ms**; on noise, which never piles into one bin, from 5.8 to 4.7 ms.
+
 ### ⚠️ The bulbs need their own rate
 
 `SYNC_INTERVAL_SECONDS` and the Home Assistant write rate used to be the same
