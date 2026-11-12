@@ -301,8 +301,8 @@ def sample_frame(raw: bytes, width: int, height: int, sample_stride: int) -> Amb
 
     So there are two implementations of the histogram, and they must agree
     exactly -- a guard test asserts that on synthetic frames. numpy is used when
-    it is importable, which is every Linux install here; the Python loop remains
-    for anywhere it is not (Windows, where this program also runs).
+    it is importable (on Linux and on Windows, where dxcam already needs it); the
+    Python loop remains for anywhere it is not.
     """
 
     sample_step = max(1, round(sample_stride ** 0.5))

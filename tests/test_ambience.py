@@ -279,7 +279,7 @@ class HistogramEquivalenceTest(unittest.TestCase):
     """Two implementations of the same histogram must not drift.
 
     The numpy path is ~100x faster and is what runs where numpy is installed; the Python loop
-    is what runs anywhere numpy is missing (Windows). If they disagree, the same
+    is what runs anywhere numpy is missing. If they disagree, the same
     screen produces different lights on different machines -- and the difference
     would show up as "the ambience feels off", not as a failure.
     """
