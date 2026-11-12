@@ -534,6 +534,9 @@ How it behaves:
 - **The restart button** fires on a press seen after the first reading, never on the first reading itself, so a
   restart cannot loop.
 - **No reading is not a value:** an unreachable Home Assistant or a missing helper leaves both sides alone.
+- **One request per poll:** every helper is read with a single `POST /api/template` that returns their states as
+  JSON (`HomeAssistantClient.get_states`), and the control and zones files are parsed once per poll. A request per
+  helper and a parse per binding (the first version) doubled the loop's idle CPU (0.93 % of a core against 0.49 %).
 - A saved pattern longer than 255 characters (one the retired editor could make) cannot be shown in Home Assistant:
   it keeps playing, `setting_problems` says so, and typing a pattern in Home Assistant replaces it.
 - The helpers must exist with these options and limits; create them by hand (Settings → Devices & services →

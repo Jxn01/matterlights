@@ -138,6 +138,8 @@ class HubMirror:
         self._without_reading: set[str] = set()
         self._restart_seen: str | None = None
         self._started = started or datetime.now(timezone.utc)
+        self._state_cache = None                    # the control file, parsed once per tick (cleared after a write)
+        self._zones_cache: list[ScreenZone] | None = None
         self._bindings = self._build_bindings()
 
     # -- what the status sensor shows -------------------------------------------------------------------------------
@@ -149,8 +151,19 @@ class HubMirror:
         return self._client.call_service(domain, service, {"entity_id": entity_id, **data})
 
     def _zones(self) -> list[ScreenZone]:
-        s = self._settings
-        return load_configured_light_zones(s.light_zone_layout, list(s.light_entities), s.light_zone_file)
+        if self._zones_cache is None:
+            s = self._settings
+            self._zones_cache = load_configured_light_zones(s.light_zone_layout, list(s.light_entities), s.light_zone_file)
+        return list(self._zones_cache)              # a copy: a zone apply edits the list it gets
+
+    def _state(self):
+        if self._state_cache is None:
+            self._state_cache = load_control_state(self._path)
+        return self._state_cache
+
+    def _forget_local(self) -> None:
+        self._state_cache = None
+        self._zones_cache = None
 
     def _zone_binding(self, index: int) -> Binding:
         entity_id = self._entities[f"zone_{index + 1}"]
@@ -177,7 +190,7 @@ class HubMirror:
 
     def _build_bindings(self) -> list[Binding]:
         e = self._entities
-        state = lambda: load_control_state(self._path)  # noqa: E731
+        state = self._state
         default_engine = self._settings.color_sync_mode
 
         def engine_local() -> str:
@@ -233,8 +246,14 @@ class HubMirror:
         return bindings
 
     # -- the thread -----------------------------------------------------------------------------------------------------
-    def _reading(self, entity_id: str) -> str | None:
-        value = self._client.get_state(entity_id)
+    def _read_all(self) -> dict[str, str | None]:
+        ids = [b.entity_id for b in self._bindings] + [self._entities["restart"]]
+        batch = getattr(self._client, "get_states", None)
+        if batch is not None:
+            return batch(ids)                       # one request for all of them
+        return {entity_id: self._client.get_state(entity_id) for entity_id in ids}
+
+    def _reading(self, entity_id: str, value: str | None) -> str | None:
         if value is None:
             if entity_id not in self._without_reading:
                 self._without_reading.add(entity_id)
@@ -245,12 +264,14 @@ class HubMirror:
         return value
 
     def tick(self) -> None:
+        self._forget_local()
+        remote = self._read_all()
         for binding in self._bindings:
-            self._tick_binding(binding)
-        self._tick_restart()
+            self._tick_binding(binding, remote.get(binding.entity_id))
+        self._tick_restart(remote.get(self._entities["restart"]))
 
-    def _tick_binding(self, b: Binding) -> None:
-        remote = self._reading(b.entity_id)
+    def _tick_binding(self, b: Binding, value: str | None) -> None:
+        remote = self._reading(b.entity_id, value)
         if remote is None:
             return
         try:
@@ -285,6 +306,7 @@ class HubMirror:
         try:
             b.apply(remote)
         except ValueError as exc:
+            self._forget_local()
             if self._failed.get(b.entity_id) != remote:
                 self._failed[b.entity_id] = remote
                 self._logger.warning("Cannot apply %s = %r: %s", b.entity_id, remote, exc)
@@ -292,12 +314,12 @@ class HubMirror:
             if b.entity_id not in self._agreed:
                 self._agreed[b.entity_id] = local       # first reading: keep both sides until HA is corrected
             return
+        self._forget_local()                        # the file just changed: read it again
         self._agree(b, b.local())
         self._logger.info("%s set to %r from Home Assistant", b.entity_id, remote)
 
-    def _tick_restart(self) -> None:
+    def _tick_restart(self, pressed: str | None) -> None:
         # Not self._reading(): a button never pressed is "unknown", which is its normal state, not a missing reading.
-        pressed = self._client.get_state(self._entities["restart"])
         if pressed is None or pressed == self._restart_seen:
             return
         self._restart_seen = pressed

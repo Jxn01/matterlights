@@ -421,3 +421,93 @@ class Start(Base):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class OneRequestPerTick(Base):
+    """2026-11-12: a request per helper (13 a second) and a file parse per binding doubled the loop's idle CPU."""
+
+    def test_one_batch_read_and_one_parse_per_tick(self):
+        from unittest import mock
+
+        from matterlights import ha_hub
+
+        class BatchHA(FakeHA):
+            batches = 0
+
+            def get_states(self, ids):
+                self.batches += 1
+                return {i: self.states.get(i) for i in ids}
+
+            def get_state(self, entity_id):
+                raise AssertionError("one request per tick, not one per helper")
+
+        ha = BatchHA(**self.agreeing_ha().states)
+        m = self.mirror(ha)
+        real = ha_hub.load_control_state
+        with mock.patch.object(ha_hub, "load_control_state", side_effect=real) as parses:
+            m.tick(); m.tick(); m.tick()
+        self.assertEqual(ha.batches, 3)
+        self.assertEqual(parses.call_count, 3)
+
+    def test_a_write_within_a_tick_is_read_back(self):
+        """The cache must not hide the file the tick just wrote, or the next tick would push the old value back."""
+
+        class BatchHA(FakeHA):
+            def get_states(self, ids):
+                return {i: self.states.get(i) for i in ids}
+
+        ha = BatchHA(**self.agreeing_ha().states)
+        m = self.mirror(ha)
+        m.tick()
+        ha.states[E["brightness"]] = "30.0"
+        m.tick(); m.tick()
+        self.assertEqual(self.custom().brightness, 76)
+        self.assertEqual(ha.calls, [])
+
+
+class ClientBatchRead(unittest.TestCase):
+    def client(self, text=None, error=None):
+        from unittest import mock
+
+        import requests
+
+        from matterlights.home_assistant import HomeAssistantClient
+
+        class Response:
+            def __init__(self):
+                self.text = text
+
+            def raise_for_status(self):
+                if error:
+                    raise requests.HTTPError(error)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        session = mock.Mock()
+        session.post.return_value = Response()
+        patcher = mock.patch.object(HomeAssistantClient, "_get_session", return_value=session)   # the class has slots
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return HomeAssistantClient("http://ha.test:8123", "t", 3.0), session
+
+    def test_states_come_back_with_no_reading_as_none(self):
+        c, session = self.client('{"input_number.a": "40.0", "input_text.b": "unknown", "input_button.c": "unavailable"}')
+        got = c.get_states(["input_number.a", "input_text.b", "input_button.c", "input_select.missing"])
+        self.assertEqual(got, {"input_number.a": "40.0", "input_text.b": None, "input_button.c": None,
+                               "input_select.missing": None})
+        url = session.post.call_args.args[0]
+        template = session.post.call_args.kwargs["json"]["template"]
+        self.assertEqual(url, "http://ha.test:8123/api/template")
+        self.assertIn('states("input_number.a") | to_json', template)
+
+    def test_a_failed_request_is_no_reading_for_all(self):
+        c, _ = self.client(error="502")
+        self.assertEqual(c.get_states(["a.b", "c.d"]), {"a.b": None, "c.d": None})
+
+    def test_an_unreadable_answer_is_no_reading(self):
+        c, _ = self.client(text="not json")
+        self.assertEqual(c.get_states(["a.b"]), {"a.b": None})

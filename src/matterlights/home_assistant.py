@@ -5,6 +5,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass, field
+import json
 from datetime import datetime, timezone
 import logging
 import threading
@@ -138,6 +139,29 @@ class HomeAssistantClient:
             LOGGER.debug("Failed to read %s: %s", entity_id, exc)
             return None
         return None if state in ("unknown", "unavailable") else state
+
+    def get_states(self, entity_ids: list[str]) -> dict[str, str | None]:
+        """Several entities' states in ONE request (a template that returns them as JSON), each ``None`` for no
+        reading exactly like ``get_state``. Home Assistant unreachable or the answer unreadable: every value is
+        ``None``. The lights hub reads ~13 helpers every second; one request each doubled the loop's idle CPU."""
+
+        template = "{" + ",".join(
+            f'"{entity_id}": {{{{ states({json.dumps(entity_id)}) | to_json }}}}' for entity_id in entity_ids
+        ) + "}"
+        try:
+            with self._get_session().post(
+                f"{self.base_url}/api/template", json={"template": template}, timeout=self.timeout_seconds,
+            ) as response:
+                response.raise_for_status()
+                states = json.loads(response.text)
+        except (requests.RequestException, ValueError) as exc:
+            LOGGER.debug("Failed to read %d states: %s", len(entity_ids), exc)
+            return {entity_id: None for entity_id in entity_ids}
+        out: dict[str, str | None] = {}
+        for entity_id in entity_ids:
+            value = states.get(entity_id) if isinstance(states, dict) else None
+            out[entity_id] = None if value in (None, "unknown", "unavailable") else str(value)
+        return out
 
     def get_switch_state(self, entity_id: str) -> bool | None:
         """Read an on/off entity: ``True``, ``False``, or ``None`` for no reading.
